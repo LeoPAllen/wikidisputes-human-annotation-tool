@@ -61,36 +61,37 @@ def _records(rows: list[dict[str, Any]]) -> pd.DataFrame:
 def build_export(storage: Storage, dataset: Dataset, coder: str, qc_report: str) -> bytes:
     current = storage.rows("utterance_annotations", coder)
     disputes = storage.rows("dispute_annotations", coder)
-    current_by_key = {(r["partition"], str(r["utterance_id"])): r for r in current}
-    dispute_by_key = {(r["partition"], str(r["dispute_id"])): json.loads(r["payload_json"]) for r in disputes}
-    sheets: dict[str, pd.DataFrame] = {}
-    for partition, sheet in (("calibration", "Calibration_Annotations"), ("heldout", "Heldout_Annotations")):
-        source = dataset.partitions.get(partition, pd.DataFrame()).copy()
-        output_rows = []
-        for _, source_row in source.iterrows():
-            row = {
-                key: (None if pd.isna(value) else value)
-                for key, value in source_row.items()
-                if not str(key).startswith("_")
-            }
-            annotation = current_by_key.get((partition, str(source_row["utterance_id"])))
-            if annotation and annotation["status"] == "submitted":
-                row.update({key: _flatten(value) for key, value in json.loads(annotation["payload_json"]).items()})
-                row.update(
-                    {
-                        "coder_id": coder,
-                        "schema_version": annotation["schema_version"],
-                        "schema_hash": annotation["schema_hash"],
-                        "annotation_saved_at": annotation["saved_at"],
-                        "revision_number": annotation["revision_number"],
-                    }
-                )
-                decision = dispute_by_key.get((partition, str(source_row["dispute_id"])), {})
-                row["C_primary_dispute_object"] = decision.get("C_primary_dispute_object")
-            output_rows.append(row)
-        sheets[sheet] = pd.DataFrame(output_rows)
-        for column in INTEGER_COLUMNS & set(sheets[sheet].columns):
-            sheets[sheet][column] = pd.to_numeric(sheets[sheet][column], errors="coerce").astype("Int64")
+    current_by_id = {str(row["utterance_id"]): row for row in current}
+    dispute_by_id = {str(row["dispute_id"]): json.loads(row["payload_json"]) for row in disputes}
+    output_rows = []
+    for _, source_row in dataset.source_rows.iterrows():
+        row = {
+            key: (None if pd.isna(value) else value)
+            for key, value in source_row.items()
+            if not str(key).startswith("_")
+        }
+        is_utterance = source_row["utterance_role"] == "utterance"
+        annotation = current_by_id.get(str(source_row["utterance_id"])) if is_utterance else None
+        if annotation and annotation["status"] == "submitted":
+            row.update({key: _flatten(value) for key, value in json.loads(annotation["payload_json"]).items()})
+            row.update(
+                {
+                    "coder_id": coder,
+                    "schema_version": annotation["schema_version"],
+                    "schema_hash": annotation["schema_hash"],
+                    "annotation_saved_at": annotation["saved_at"],
+                    "revision_number": annotation["revision_number"],
+                }
+            )
+        if is_utterance:
+            decision = dispute_by_id.get(str(source_row["dispute_id"]), {})
+            row["C_primary_dispute_object"] = decision.get("C_primary_dispute_object")
+        output_rows.append(row)
+    sheets: dict[str, pd.DataFrame] = {"Gold_Annotations": pd.DataFrame(output_rows)}
+    for column in INTEGER_COLUMNS & set(sheets["Gold_Annotations"].columns):
+        sheets["Gold_Annotations"][column] = pd.to_numeric(sheets["Gold_Annotations"][column], errors="coerce").astype(
+            "Int64"
+        )
     sheets["Dispute_Annotations"] = _records(disputes)
     sheets["Annotation_Events"] = _records(storage.rows("utterance_annotation_events", coder))
     sheets["Dispute_Events"] = _records(storage.rows("dispute_annotation_events", coder))

@@ -4,7 +4,7 @@
 
 - `app.py`: Streamlit composition only.
 - `wikidisputes_ui/`: configuration, authoritative codebook parsing, ingestion, validation, rules, SQLite storage, export, and UI helpers.
-- `config/project.toml`: active phase, schema, and local paths.
+- `config/project.toml`: unified annotation sheet, schema, and local paths.
 - `data/source/*.xlsx`: immutable researcher inputs.
 - `data/local/`, `exports/`, `reports/`: generated local artifacts.
 - `tests/`: small synthetic conversations and focused unit/AppTest coverage.
@@ -31,10 +31,9 @@ Use Python 3.11+ from `.venv`:
 - Store inapplicability only as JSON/SQL null and export it as a blank cell.
 - Do not preselect substantive UI choices. Deliberately answered null feedback must remain distinguishable via `answered_fields`.
 - Current tables are projections; event tables are append-only. Every saved event carries coder, schema version/hash, UTC timestamps, elapsed wall time, and application version.
-- Held-out requires `schema_locked = true`. Never expose administrative or escalation fields to coders.
+- `schema_locked` is an optional administrative freeze, independent of ordinary annotation. Never expose administrative or escalation fields to coders.
 - Keep dependencies small and tests synthetic.
 
 ## Definition of done
 
 A change is complete only after validation, pytest, Ruff lint, Ruff format check, and a Streamlit/AppTest smoke run pass; the rendered workflow and diff are reviewed; source workbook hashes are unchanged; and QC blockers are reported as source-data issues rather than bypassed.
-

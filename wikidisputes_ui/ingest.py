@@ -8,11 +8,11 @@ from typing import Any
 
 import pandas as pd
 
-PARTITION_SHEETS = {"calibration": "3_Calibration_Coder", "heldout": "4_Heldout_Coder"}
 REQUIRED_COLUMNS = {
     "dispute_sequence",
     "dispute_id",
     "utterance_order",
+    "utterance_role",
     "utterance_id",
     "speaker_id",
     "timestamp",
@@ -55,33 +55,43 @@ ANNOTATION_COLUMNS = {
 
 @dataclass
 class Dataset:
-    partitions: dict[str, pd.DataFrame]
+    source_rows: pd.DataFrame
 
-    def frame(self, partition: str) -> pd.DataFrame:
-        return self.partitions[partition]
+    @property
+    def annotatable_rows(self) -> pd.DataFrame:
+        return self.source_rows[self.source_rows["utterance_role"] == "utterance"].copy()
 
-    def prior_context(self, partition: str, dispute_id: str, utterance_order: int) -> pd.DataFrame:
-        frame = self.frame(partition)
-        return frame[
-            (frame["dispute_id"].astype(str) == str(dispute_id)) & (frame["utterance_order"] < utterance_order)
-        ].copy()
+    @property
+    def context_rows(self) -> pd.DataFrame:
+        return self.source_rows[self.source_rows["utterance_role"] == "context"].copy()
 
-    def full_dispute(self, partition: str, dispute_id: str) -> pd.DataFrame:
-        frame = self.frame(partition)
-        return frame[frame["dispute_id"].astype(str) == str(dispute_id)].copy()
+    def rows_in_dispute(self, dispute_id: str) -> pd.DataFrame:
+        return self.source_rows[self.source_rows["dispute_id"].astype(str) == str(dispute_id)].copy()
+
+    def annotatable_in_dispute(self, dispute_id: str) -> pd.DataFrame:
+        rows = self.rows_in_dispute(dispute_id)
+        return rows[rows["utterance_role"] == "utterance"].copy()
+
+    def displayable_prior_context(self, dispute_id: str, utterance_order: int) -> pd.DataFrame:
+        rows = self.rows_in_dispute(dispute_id)
+        return rows[rows["utterance_order"] < utterance_order].copy()
+
+    def earlier_annotatable_turns(self, dispute_id: str, utterance_order: int) -> pd.DataFrame:
+        rows = self.displayable_prior_context(dispute_id, utterance_order)
+        return rows[rows["utterance_role"] == "utterance"].copy()
+
+    def prior_context(self, dispute_id: str, utterance_order: int) -> pd.DataFrame:
+        return self.displayable_prior_context(dispute_id, utterance_order)
+
+    def full_dispute(self, dispute_id: str) -> pd.DataFrame:
+        return self.rows_in_dispute(dispute_id)
 
 
-def read_gold(path: str | Path) -> Dataset:
-    workbook = pd.ExcelFile(path)
-    partitions = {}
-    for partition, sheet in PARTITION_SHEETS.items():
-        if sheet in workbook.sheet_names:
-            frame = pd.read_excel(path, sheet_name=sheet, dtype=object)
-            frame["utterance_order"] = pd.to_numeric(frame["utterance_order"], errors="raise").astype(int)
-            frame["_source_row"] = range(2, len(frame) + 2)
-            frame["_partition"] = partition
-            partitions[partition] = frame
-    return Dataset(partitions)
+def read_gold(path: str | Path, annotation_sheet: str = "Gold_Annotation") -> Dataset:
+    frame = pd.read_excel(path, sheet_name=annotation_sheet, dtype=object)
+    frame["utterance_order"] = pd.to_numeric(frame["utterance_order"], errors="raise").astype(int)
+    frame["_source_row"] = range(2, len(frame) + 2)
+    return Dataset(frame)
 
 
 def source_metadata(row: pd.Series) -> dict[str, Any]:

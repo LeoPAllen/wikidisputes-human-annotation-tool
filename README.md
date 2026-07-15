@@ -1,91 +1,35 @@
 # WikiDisputes human annotation tool
 
-A private, local Streamlit application for sequential KS/KI annotation. Each coder must receive a separate repository copy, or at minimum a separate `database_path` in `config/project.toml`. Coder IDs identify local records; they do not authenticate users.
+A private, local Streamlit workflow for coding the single `Gold_Annotation` worksheet in `data/source/gold_input.xlsx`. All 438 source rows are retained; 404 `utterance` rows are annotatable and 34 `context` rows are display-only conversation headings.
 
-## Setup and validation
+## Setup and run
 
-Python 3.11 or newer is required. The two files in `data/source/` are immutable inputs.
-
-macOS/Linux:
+Python 3.11+ is required. On macOS/Linux:
 
 ```bash
 python3.11 -m venv .venv
-.venv/bin/python -m pip install --upgrade pip
-.venv/bin/pip install -r requirements-dev.txt
+.venv/bin/pip install -r requirements.txt -r requirements-dev.txt
 .venv/bin/python -m wikidisputes_ui.validation
 .venv/bin/streamlit run app.py
 ```
 
-Windows PowerShell:
+On Windows PowerShell, use `.venv\Scripts\python.exe`, `.venv\Scripts\pip.exe`, and `.venv\Scripts\streamlit.exe` in the equivalent commands.
 
-```powershell
-py -3.11 -m venv .venv
-.venv\Scripts\python -m pip install --upgrade pip
-.venv\Scripts\pip install -r requirements-dev.txt
-.venv\Scripts\python -m wikidisputes_ui.validation
-.venv\Scripts\streamlit run app.py
-```
+The first screen asks for a pseudonymous coder ID. It identifies local records; it is not authentication. Give each coder a separate repository/database copy, or at minimum a distinct `database_path`. Use the sidebar to export the active coder's workbook or download a consistent SQLite backup.
 
-Validation writes `reports/input_qc.md`. Blocking errors deliberately prevent the UI from opening annotation data; the program never repairs, reorders, or rewrites a source workbook.
+## Data and schema
 
-## Share the app with annotators
+`config/project.toml` names `annotation_sheet = "Gold_Annotation"`, schema `0.9.7`, and `Core_Schema_SIMPLIFIED`. Do not edit either source XLSX. The simplified schema and its controlled-value sheets are authoritative.
 
-This app is designed to run locally. Do not put one copy on a shared server: coder IDs are labels, not passwords, and a shared database would let coders switch into one another's records.
+Codebook evolution is tracked independently of the dataset by `schema_version` plus the SHA-256 of the complete codebook. If the codebook changes, increment `schema_version`; reusing a registered version with a different hash fails closed. `schema_locked` is an optional administrative freeze and is normally `false` during annotation.
 
-1. **Prepare the study copy.** Set the intended `phase`, `schema_locked`, and paths in `config/project.toml`. Run validation and the checks under [Verification](#verification). Resolve any blocking source-data issues before distribution.
-2. **Make one clean copy per annotator.** Each copy must contain the repository files and the two unchanged workbooks in `data/source/`, but must not contain `.venv/`, an existing file in `data/local/`, prior `exports/`, or prior `reports/`. Give each copy a unique name, such as `wikidisputes_coder_01`, and send it through the study's approved private file-transfer channel. Never email source data unless the study protocol permits it.
-3. **Assign an ID.** Privately give each annotator one pseudonymous ID, for example `coder_01`. IDs must be 3–40 characters and may contain letters, numbers, `_`, or `-`. Do not reuse an ID across annotators.
-4. **Have the annotator install and start the app.** After extracting their copy, they run the commands below from its top-level directory, open the local URL printed by Streamlit (normally `http://localhost:8501`), and enter only their assigned ID.
+## Research workflow
 
-   macOS/Linux:
+Before distributing a study copy, run validation and all checks below. Back up the SQLite file regularly. Exports contain `Gold_Annotations`, coder-specific current dispute decisions and event histories, registered schema versions, and the QC report. Context rows remain in source order and have blank utterance annotation/provenance fields.
 
-   ```bash
-   python3.11 -m venv .venv
-   .venv/bin/python -m pip install --upgrade pip
-   .venv/bin/pip install -r requirements.txt
-   .venv/bin/python -m wikidisputes_ui.validation
-   .venv/bin/streamlit run app.py
-   ```
+Coder-facing hiding of `escalated`, outcomes, administrative sampling fields, `dispute_resolution_url`, `Dispute_Rationales`, and `Validation_Audit` is UI blinding, not filesystem access control. The master XLSX still contains administrative data. Hard blinding requires distributing a separately sanitized workbook/repository.
 
-   Windows PowerShell:
-
-   ```powershell
-   py -3.11 -m venv .venv
-   .venv\Scripts\python -m pip install --upgrade pip
-   .venv\Scripts\pip install -r requirements.txt
-   .venv\Scripts\python -m wikidisputes_ui.validation
-   .venv\Scripts\streamlit run app.py
-   ```
-
-5. **Save and back up work.** Annotation saves are written automatically to the SQLite file configured by `database_path`. At the end of every session, the annotator uses **Download database backup** and stores it securely. They should not edit the source workbooks, configuration, database, or exported files.
-6. **Return the results.** When finished, the annotator downloads both **Export my annotations** (`.xlsx`) and **Download database backup** (`.sqlite3`) and returns both through the approved private channel. Keep each annotator's files in a separate folder, confirm the filenames contain the assigned ID, and preserve the returned database unchanged. Do not combine or overwrite coder databases; use the XLSX export for analysis and the SQLite backup for recovery and audit history.
-
-If an annotator needs to resume on another computer, send that annotator's complete app copy with their latest SQLite backup placed at the configured `database_path`. The app and database should never be open on two computers at once.
-
-## Workflow
-
-Enter the assigned pseudonymous coder ID, resume the next sequential utterance, and explicitly answer every applicable field. Drafts may be incomplete. Submission enforces dependencies, null semantics, evidence, and justification rules. Only prior turns are visible. Once every utterance in a dispute is submitted, the separate dispute screen reveals the whole discussion and collects its primary object. `Review completed` permits revisions while preserving append-only history and the original no-future context boundary.
-
-The sidebar provides:
-
-- **Export my annotations**: an auditable XLSX containing current state, events, schema registrations, and QC;
-- **Download database backup**: a consistent SQLite snapshot;
-- **Switch coder**: an explicit, warned identity change.
-
-Downloaded exports are browser downloads. Programmatic exports can also be written with `wikidisputes_ui.export.write_export` to the configured `export_directory`.
-
-## Calibration to held-out transition
-
-Start with `phase = "calibration"` and `schema_locked = false`. Only `3_Calibration_Coder` is exposed. After calibration is reconciled and the directions are frozen, give any changed codebook a new schema version, then set:
-
-```toml
-phase = "heldout"
-schema_locked = true
-```
-
-Held-out mode refuses to start without the lock and rejects version/hash drift. It exposes only `4_Heldout_Coder`. Existing events retain their original schema version and hash.
-
-## Verification
+## Verification and troubleshooting
 
 ```bash
 .venv/bin/pytest -q
@@ -94,16 +38,7 @@ Held-out mode refuses to start without the lock and rejects version/hash drift. 
 .venv/bin/python -m wikidisputes_ui.validation
 ```
 
-PowerShell uses the same commands with `.venv\Scripts\` instead of `.venv/bin/`.
-
-## Troubleshooting
-
-- **Missing partition sheets:** the input must contain `3_Calibration_Coder` and `4_Heldout_Coder`; do not infer partitions from an administrative master sheet.
-- **Schema hash drift:** change `schema_version` when directions change. Never replace a registered workbook under the same version.
-- **Resetting a local test copy:** stop Streamlit and move the configured SQLite database aside. Never share or merge databases between coders.
-- **Refresh timing:** elapsed time is best-effort wall time from opening to saving. Refresh or restart begins a conservative new attempt; it is not active-attention tracking.
-- **Port already used:** launch with `streamlit run app.py --server.port 8502`.
-
-## Privacy and scope
-
-The app is local: no telemetry, APIs, cloud storage, model assistance, or authentication service. Administrative sampling fields and escalation outcomes are neither rendered nor used for coder-facing decisions.
+- Missing sheet or columns: restore the authoritative `Gold_Annotation` worksheet; do not repair rows in application code.
+- Codebook hash mismatch: increment `schema_version` after the directions change.
+- Legacy database collision: migration stops before changes and identifies the colliding coder/unit records. Reconcile or archive them in a copy, then retry.
+- Timing is best-effort wall time for an opened screen; it is not active-attention tracking.

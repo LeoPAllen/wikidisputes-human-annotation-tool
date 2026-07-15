@@ -1,18 +1,9 @@
 # Architecture and versioning
 
-The application has four boundaries:
+`config` selects the single `Gold_Annotation` worksheet and resolves local paths. Validation reads that sheet and the authoritative `Core_Schema_SIMPLIFIED` codebook before annotation can start. Ingestion retains every source row in its original order while exposing separate views for all rows, context headings, and substantive annotatable turns.
 
-1. `config` selects exactly one phase and resolves local paths.
-2. `validation`, `codebook`, and `ingest` read immutable XLSX inputs. Blocking structure errors stop annotation; ingestion never sorts or repairs rows.
-3. `models` calculates applicability and validates explicit answers independently of Streamlit. `app.py` renders the active row and obtains context only through the strict `utterance_order < focal_order` query.
-4. `storage` writes current projections plus immutable snapshot events in one SQLite transaction. `export` joins coder-isolated projections back onto preserved source metadata and includes the complete event trail.
+For focal order `t`, the UI may display only same-dispute rows with `utterance_order < t`. Only earlier substantive turns contribute to applicability or selectable evidence IDs. Context headings remain display-only and never enter progress, readiness, storage, review, or utterance annotation exports.
 
-## Schema identity
+SQLite stores coder-isolated current projections and append-only events. Current keys are `(coder_id, utterance_id)` and `(coder_id, dispute_id)`. A one-time transactional migration backs up older databases, checks unified-key collisions, and rebuilds the four annotation tables without the obsolete column. Collision detection aborts before any database change.
 
-The identity of directions is `(schema_version, SHA-256(codebook bytes))`. Startup registers the source filename and UTC time. Reusing a version with a different hash is an error; held-out also locks the active identity. Revisions append events under the schema used at save time, so a later schema never rewrites history.
-
-## Unit state
-
-An utterance progresses from absent to optional draft to submitted revision 1. A changed save after submission is revision 2 or later; unchanged navigation creates no event. A dispute becomes complete only when all its utterances are submitted and a separate dispute-level decision exists. The exported primary object is then propagated to submitted utterance rows without duplicating its stored decision.
-
-Timing is wall-clock metadata, clamped nonnegative. It is intentionally not browser activity surveillance.
+Codebook evolution is independent of the dataset. Every event records `schema_version` and the entire codebook file's SHA-256. Reusing a version with a changed hash is rejected and requires a version increment. `schema_locked` is an optional administrative freeze, not a prerequisite for annotation.

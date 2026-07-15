@@ -10,7 +10,7 @@ import pandas as pd
 
 from .codebook import EXPECTED_LABELS, load_codebook
 from .config import ProjectConfig, load_config
-from .ingest import ANNOTATION_COLUMNS, PARTITION_SHEETS, REQUIRED_COLUMNS
+from .ingest import ANNOTATION_COLUMNS, REQUIRED_COLUMNS
 
 
 @dataclass
@@ -40,24 +40,22 @@ def validate_inputs(config: ProjectConfig) -> QCResult:
     except Exception as exc:
         result.errors.append(f"Cannot read gold workbook: {exc}")
         return result
-    frames: dict[str, pd.DataFrame] = {}
-    for partition, sheet in PARTITION_SHEETS.items():
-        if sheet not in book.sheet_names:
-            result.errors.append(
-                f"Missing required sheet {sheet!r} for {partition} partition; found {book.sheet_names!r}."
-            )
-            continue
+    sheet = config.annotation_sheet
+    if sheet not in book.sheet_names:
+        result.errors.append(f"Missing required annotation sheet {sheet!r}; found {book.sheet_names!r}.")
+    else:
         frame = pd.read_excel(config.gold_path, sheet_name=sheet, dtype=object)
-        frames[partition] = frame
         missing = sorted((REQUIRED_COLUMNS | ANNOTATION_COLUMNS) - set(frame.columns))
         if not any(col in frame.columns for col in ("article_title", "source_page_title", "dispute_label")):
             missing.append("article_title (or source_page_title/dispute_label alias)")
         if missing:
             result.errors.append(f"{sheet}: missing columns: {', '.join(missing)}")
-            continue
+            return result
         for idx, row in frame.iterrows():
             excel_row = idx + 2
             uid, did, text = row["utterance_id"], row["dispute_id"], row["utterance_text"]
+            if pd.isna(uid) or not str(uid).strip():
+                result.errors.append(f"{sheet} row {excel_row}: empty utterance_id.")
             if pd.isna(did) or not str(did).strip():
                 result.errors.append(f"{sheet} row {excel_row}: empty dispute_id.")
             if pd.isna(text) or not str(text).strip():
@@ -67,13 +65,22 @@ def validate_inputs(config: ProjectConfig) -> QCResult:
             result.errors.append(
                 f"{sheet}: duplicate utterance_id {uid!r} at rows {', '.join(str(i + 2) for i in group.index)}."
             )
-        seen_disputes: list[str] = []
+        roles = set(frame["utterance_role"].dropna().astype(str))
+        invalid_roles = roles - {"context", "utterance"}
+        if frame["utterance_role"].isna().any() or invalid_roles:
+            result.errors.append(
+                f"{sheet}: utterance_role values must be exactly context or utterance; invalid values: "
+                f"{sorted(invalid_roles | ({'<blank>'} if frame['utterance_role'].isna().any() else set()))}."
+            )
         for did, group in frame.groupby("dispute_id", sort=False, dropna=False):
             did = str(did)
             orders = pd.to_numeric(group["utterance_order"], errors="coerce")
             rows = [int(i) + 2 for i in group.index]
             if orders.isna().any():
                 result.errors.append(f"{sheet} dispute {did}: nonnumeric utterance_order at rows {rows}.")
+                continue
+            if not (orders == orders.astype(int)).all():
+                result.errors.append(f"{sheet} dispute {did}: utterance_order must contain integers; rows {rows}.")
                 continue
             actual = orders.astype(int).tolist()
             expected = list(range(min(actual), max(actual) + 1))
@@ -83,9 +90,22 @@ def validate_inputs(config: ProjectConfig) -> QCResult:
                 )
             positions = frame.index[frame["dispute_id"].astype(str) == did].tolist()
             if positions != list(range(min(positions), max(positions) + 1)):
-                result.errors.append(
-                    f"{sheet}: dispute {did} is split/interleaved at rows {[i + 2 for i in positions]}."
-                )
+                result.errors.append(f"{sheet}: dispute {did} is interleaved at rows {[i + 2 for i in positions]}.")
+            context = group[group["utterance_role"] == "context"]
+            if len(context) != 1:
+                result.errors.append(f"{sheet} dispute {did}: expected exactly one context row; found {len(context)}.")
+            elif context.index[0] != group.index[0]:
+                result.errors.append(f"{sheet} dispute {did}: context row must be first.")
+            if not context.empty:
+                nonblank = [column for column in ANNOTATION_COLUMNS if context[column].notna().any()]
+                if nonblank:
+                    result.errors.append(
+                        f"{sheet} dispute {did}: context annotation fields are not blank: {', '.join(sorted(nonblank))}."
+                    )
+            substantive = group[group["utterance_role"] == "utterance"]
+            substantive_orders = pd.to_numeric(substantive["utterance_order"], errors="coerce")
+            if substantive_orders.isna().any() or not substantive_orders.is_monotonic_increasing:
+                result.errors.append(f"{sheet} dispute {did}: substantive ordering is incoherent.")
             id_to_order = {str(r["utterance_id"]): int(r["utterance_order"]) for _, r in group.iterrows()}
             for idx, row in group.iterrows():
                 target = row["reply_to_utterance_id"]
@@ -97,8 +117,9 @@ def validate_inputs(config: ProjectConfig) -> QCResult:
                         f"{sheet} row {idx + 2} ({row['utterance_id']}): reply target {target!r} is not in dispute {did}."
                     )
                 elif id_to_order[target] >= int(row["utterance_order"]):
-                    result.errors.append(
-                        f"{sheet} row {idx + 2} ({row['utterance_id']}): reply target {target!r} does not precede the focal utterance."
+                    result.warnings.append(
+                        f"{sheet} row {idx + 2} ({row['utterance_id']}): reply target {target!r} has a later "
+                        "utterance_order (documented final-state reconstruction artifact); future text remains hidden."
                     )
             normalized: dict[str, list[tuple[int, str]]] = {}
             for idx, row in group.iterrows():
@@ -110,13 +131,13 @@ def validate_inputs(config: ProjectConfig) -> QCResult:
                         + ", ".join(f"row {r} ({u})" for r, u in matches)
                         + "."
                     )
-            substantive = [
+            text_rows = [
                 (idx + 2, str(row["utterance_id"]), _norm(row["utterance_text"])) for idx, row in group.iterrows()
             ]
-            for position, (excel_row, uid, text) in enumerate(substantive):
+            for position, (excel_row, uid, text) in enumerate(text_rows):
                 absorbed = [
                     (row_number, prior_id)
-                    for row_number, prior_id, prior_text in substantive[:position]
+                    for row_number, prior_id, prior_text in text_rows[:position]
                     if len(prior_text) >= 40 and prior_text in text
                 ]
                 if len(absorbed) >= 2:
@@ -125,18 +146,11 @@ def validate_inputs(config: ProjectConfig) -> QCResult:
                         + ", ".join(f"row {row_number} ({prior_id})" for row_number, prior_id in absorbed)
                         + "."
                     )
-            seen_disputes.append(did)
-    if len(frames) == 2:
-        overlap = set(frames["calibration"]["dispute_id"].dropna().astype(str)) & set(
-            frames["heldout"]["dispute_id"].dropna().astype(str)
-        )
-        if overlap:
-            result.errors.append(f"Calibration/held-out dispute overlap: {', '.join(sorted(overlap))}.")
-        utterance_overlap = set(frames["calibration"]["utterance_id"].dropna().astype(str)) & set(
-            frames["heldout"]["utterance_id"].dropna().astype(str)
-        )
-        if utterance_overlap:
-            result.errors.append(f"Calibration/held-out utterance overlap: {', '.join(sorted(utterance_overlap))}.")
+        if not result.errors:
+            result.checks.append(
+                f"{sheet}: {len(frame)} retained rows; {(frame['utterance_role'] == 'utterance').sum()} annotatable; "
+                f"{(frame['utterance_role'] == 'context').sum()} context; {frame['dispute_id'].nunique()} disputes."
+            )
     try:
         codebook = load_codebook(config.codebook_path, config.schema_sheet)
         missing_labels = EXPECTED_LABELS - set(codebook.fields)

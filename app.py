@@ -33,7 +33,7 @@ def resources():
     if qc.blocking:
         return config, qc, None, None, None
     codebook = load_codebook(config.codebook_path, config.schema_sheet)
-    dataset = read_gold(config.gold_path)
+    dataset = read_gold(config.gold_path, config.annotation_sheet)
     storage = Storage(config.database_path)
     storage.register_schema(config.schema_version, codebook.file_hash, codebook.source_filename, config.schema_locked)
     return config, qc, codebook, dataset, storage
@@ -71,7 +71,7 @@ if coder is None:
     st.stop()
 
 st.sidebar.caption(f"Coder: **{coder}**")
-st.sidebar.caption(f"Partition: **{config.phase}** · Schema **{config.schema_version}**")
+st.sidebar.caption(f"Schema: **{config.schema_version}**")
 if st.sidebar.button("Switch coder"):
     st.session_state.confirm_switch = True
 if st.session_state.get("confirm_switch"):
@@ -97,15 +97,17 @@ st.sidebar.download_button(
     "application/vnd.sqlite3",
 )
 
-frame = dataset.frame(config.phase)
+frame = dataset.annotatable_rows
+annotatable_ids = set(frame["utterance_id"].astype(str))
+dispute_ids = set(frame["dispute_id"].astype(str))
 submitted_rows = storage.rows("utterance_annotations", coder)
 submitted = {
     str(row["utterance_id"]): row
     for row in submitted_rows
-    if row["partition"] == config.phase and row["status"] == "submitted"
+    if row["status"] == "submitted" and str(row["utterance_id"]) in annotatable_ids
 }
 dispute_rows = storage.rows("dispute_annotations", coder)
-completed_disputes = {str(row["dispute_id"]) for row in dispute_rows if row["partition"] == config.phase}
+completed_disputes = {str(row["dispute_id"]) for row in dispute_rows if str(row["dispute_id"]) in dispute_ids}
 review_count = sum(bool(__import__("json").loads(row["payload_json"]).get("review_flag")) for row in submitted.values())
 
 if "page" not in st.session_state:
@@ -121,7 +123,7 @@ if st.session_state.page == "home":
     ready_for_dispute = []
     for dispute_id in frame["dispute_id"].drop_duplicates():
         dispute_id = str(dispute_id)
-        unit_ids = set(dataset.full_dispute(config.phase, dispute_id)["utterance_id"].astype(str))
+        unit_ids = set(dataset.annotatable_in_dispute(dispute_id)["utterance_id"].astype(str))
         if unit_ids <= set(submitted) and dispute_id not in completed_disputes:
             ready_for_dispute.append(dispute_id)
     next_rows = frame[~frame["utterance_id"].astype(str).isin(submitted)]
@@ -130,8 +132,8 @@ if st.session_state.page == "home":
         if st.button("Complete dispute", type="primary"):
             st.session_state.page = "dispute"
             st.session_state.dispute_id = ready_for_dispute[0]
-            st.session_state.timer_start = time.monotonic()
-            st.session_state.opened_at = opened_at()
+            st.session_state.dispute_timer_start = time.monotonic()
+            st.session_state.dispute_opened_at = opened_at()
             st.rerun()
     elif not next_rows.empty:
         next_row = next_rows.iloc[0]
@@ -150,8 +152,8 @@ if st.session_state.page == "home":
         if pending_disputes and st.button("Complete next dispute", type="primary"):
             st.session_state.page = "dispute"
             st.session_state.dispute_id = pending_disputes[0]
-            st.session_state.timer_start = time.monotonic()
-            st.session_state.opened_at = opened_at()
+            st.session_state.dispute_timer_start = time.monotonic()
+            st.session_state.dispute_opened_at = opened_at()
             st.rerun()
     if submitted:
         choices = {f"{uid} · revision {row['revision_number']}": uid for uid, row in submitted.items()}
@@ -172,15 +174,19 @@ if st.session_state.page == "home":
         if dispute_choice and st.button("Open dispute decision"):
             st.session_state.page = "dispute"
             st.session_state.dispute_id = dispute_choice
-            st.session_state.timer_start = time.monotonic()
-            st.session_state.opened_at = opened_at()
+            st.session_state.dispute_timer_start = time.monotonic()
+            st.session_state.dispute_opened_at = opened_at()
             st.rerun()
     st.stop()
 
 if st.session_state.page == "dispute":
     st.title("Complete dispute-level coding")
     did = st.session_state.dispute_id
-    full = dataset.full_dispute(config.phase, did)
+    if st.session_state.get("dispute_timer_did") != did:
+        st.session_state.dispute_timer_did = did
+        st.session_state.dispute_timer_start = time.monotonic()
+        st.session_state.dispute_opened_at = opened_at()
+    full = dataset.full_dispute(did)
     for _, turn in full.iterrows():
         turn_card(turn)
     st.subheader("Primary dispute object")
@@ -188,9 +194,7 @@ if st.session_state.page == "dispute":
         with st.expander(name):
             st.write(item["Definition"])
             st.write(item["Dispute-level coding rule"])
-    existing_rows = [
-        item for item in dispute_rows if item["partition"] == config.phase and str(item["dispute_id"]) == did
-    ]
+    existing_rows = [item for item in dispute_rows if str(item["dispute_id"]) == did]
     existing = {} if not existing_rows else __import__("json").loads(existing_rows[0]["payload_json"])
     object_options = sorted(codebook.dispute_objects)
     choice = st.radio(
@@ -227,7 +231,6 @@ if st.session_state.page == "dispute":
         else:
             storage.save_dispute(
                 coder=coder,
-                partition=config.phase,
                 dispute_id=did,
                 payload={
                     "C_primary_dispute_object": choice,
@@ -239,17 +242,15 @@ if st.session_state.page == "dispute":
                 answered_fields={"C_primary_dispute_object", "coder_confidence", "review_flag"},
                 schema_version=config.schema_version,
                 schema_hash=codebook.file_hash,
-                opened_at=st.session_state.opened_at,
-                elapsed_wall_seconds=time.monotonic() - st.session_state.timer_start,
+                opened_at=st.session_state.dispute_opened_at,
+                elapsed_wall_seconds=time.monotonic() - st.session_state.dispute_timer_start,
             )
             st.session_state.page = "home"
             st.rerun()
     if existing_rows:
         with st.expander("Dispute decision history"):
             history = [
-                item
-                for item in storage.rows("dispute_annotation_events", coder)
-                if item["partition"] == config.phase and str(item["dispute_id"]) == did
+                item for item in storage.rows("dispute_annotation_events", coder) if str(item["dispute_id"]) == did
             ]
             for event in history:
                 st.write(f"Revision {event['revision_number']} · {event['event_type']} · {event['saved_at']}")
@@ -258,23 +259,23 @@ if st.session_state.page == "dispute":
 uid = st.session_state.unit_id
 matches = frame[frame["utterance_id"].astype(str) == uid]
 if matches.empty:
-    st.error("Selected utterance is not in the active partition.")
+    st.error("Selected utterance is not annotatable.")
     st.stop()
 row = matches.iloc[0]
 did = str(row["dispute_id"])
 order = int(row["utterance_order"])
-prior = dataset.prior_context(config.phase, did, order)
-current = storage.current_utterance(coder, config.phase, uid)
+prior = dataset.displayable_prior_context(did, order)
+earlier_turns = dataset.earlier_annotatable_turns(did, order)
+current = storage.current_utterance(coder, uid)
 prior_annotations = {
     str(item["utterance_id"]): __import__("json").loads(item["payload_json"])
     for item in submitted_rows
-    if item["partition"] == config.phase
-    and item["status"] == "submitted"
+    if item["status"] == "submitted"
     and str(item["dispute_id"]) == did
-    and str(item["utterance_id"]) in set(prior["utterance_id"].astype(str))
+    and str(item["utterance_id"]) in set(earlier_turns["utterance_id"].astype(str))
 }
 context = ContextState(
-    tuple(prior["utterance_id"].astype(str)),
+    tuple(earlier_turns["utterance_id"].astype(str)),
     any(v.get("KS_present") == 1 for v in prior_annotations.values()),
     any(
         v.get("KI_propose_action") == 1 or v.get("KI_announce_enacted_action") == 1 for v in prior_annotations.values()
@@ -283,8 +284,8 @@ context = ContextState(
 defaults = {} if not current else current["payload"]
 if st.session_state.get("timer_uid") != uid:
     st.session_state.timer_uid = uid
-    st.session_state.timer_start = time.monotonic()
-    st.session_state.opened_at = opened_at()
+    st.session_state.utterance_timer_start = time.monotonic()
+    st.session_state.utterance_opened_at = opened_at()
 
 st.progress(len(submitted) / max(1, len(frame)), text=f"{len(submitted)} of {len(frame)} utterances submitted")
 focal_card(row)
@@ -296,6 +297,8 @@ with left:
         if not direct.empty:
             st.subheader("Direct reply target")
             turn_card(direct.iloc[0])
+        else:
+            st.caption(f"Reply target ID: {target}. Its text is not available within the prior-context boundary.")
     relevant = prior[
         prior["utterance_id"]
         .astype(str)
@@ -465,7 +468,7 @@ with right:
         str(
             turn["utterance_id"]
         ): f"#{int(turn['utterance_order'])} — {turn['speaker_id']} — {str(turn['utterance_text'])[:55]}"
-        for _, turn in prior.iterrows()
+        for _, turn in earlier_turns.iterrows()
     }
     for name in ("KS_prior_utterance_ids", "KI_upstream_utterance_ids"):
         values[name] = st.multiselect(
@@ -499,7 +502,6 @@ with right:
         )
         storage.save_utterance(
             coder=coder,
-            partition=config.phase,
             utterance_id=uid,
             dispute_id=did,
             payload=result.payload,
@@ -507,8 +509,8 @@ with right:
             submit=False,
             schema_version=config.schema_version,
             schema_hash=codebook.file_hash,
-            opened_at=st.session_state.opened_at,
-            elapsed_wall_seconds=time.monotonic() - st.session_state.timer_start,
+            opened_at=st.session_state.utterance_opened_at,
+            elapsed_wall_seconds=time.monotonic() - st.session_state.utterance_timer_start,
         )
         st.success("Draft saved.")
     if submit_col.button("Submit and next", type="primary", use_container_width=True):
@@ -521,7 +523,6 @@ with right:
         else:
             storage.save_utterance(
                 coder=coder,
-                partition=config.phase,
                 utterance_id=uid,
                 dispute_id=did,
                 payload=result.payload,
@@ -529,23 +530,21 @@ with right:
                 submit=True,
                 schema_version=config.schema_version,
                 schema_hash=codebook.file_hash,
-                opened_at=st.session_state.opened_at,
-                elapsed_wall_seconds=time.monotonic() - st.session_state.timer_start,
+                opened_at=st.session_state.utterance_opened_at,
+                elapsed_wall_seconds=time.monotonic() - st.session_state.utterance_timer_start,
             )
-            full = dataset.full_dispute(config.phase, did)
+            full = dataset.annotatable_in_dispute(did)
             now_submitted = set(submitted) | {uid}
             if set(full["utterance_id"].astype(str)) <= now_submitted:
                 st.session_state.page = "dispute"
                 st.session_state.dispute_id = did
+                st.session_state.dispute_timer_start = time.monotonic()
+                st.session_state.dispute_opened_at = opened_at()
             else:
                 nxt = full[~full["utterance_id"].astype(str).isin(now_submitted)].iloc[0]
                 st.session_state.unit_id = str(nxt["utterance_id"])
             st.rerun()
     with st.expander("Revision history"):
-        history = [
-            r
-            for r in storage.rows("utterance_annotation_events", coder)
-            if str(r["utterance_id"]) == uid and r["partition"] == config.phase
-        ]
+        history = [r for r in storage.rows("utterance_annotation_events", coder) if str(r["utterance_id"]) == uid]
         for event in history:
             st.write(f"Revision {event['revision_number']} · {event['event_type']} · {event['saved_at']}")
