@@ -13,11 +13,34 @@ from .ingest import article_title
 def inject_css() -> None:
     st.markdown(
         """<style>
-    .focal {border-left: 5px solid #2364aa; background:#f6f8fb; padding:1.1rem 1.25rem; border-radius:.35rem; margin:.3rem 0 1rem}
-    .focal-meta,.turn-meta {color:#46505a;font-size:.86rem;margin-bottom:.45rem}
-    .turn {border-left:3px solid #8b98a5;padding:.55rem .8rem;margin:.45rem 0;background:#fafafa}
-    .context-heading {border-left:3px solid #6b7280;padding:.55rem .8rem;margin:.45rem 0;background:#eef1f4;font-weight:600}
-    .na {color:#59636e;font-style:italic;padding:.35rem 0}
+    .focal, .turn, .context-heading {
+        color: var(--text-color);
+        background: var(--secondary-background-color);
+    }
+    .focal {
+        border-left: 5px solid var(--primary-color);
+        padding: 1.1rem 1.25rem;
+        border-radius: .35rem;
+        margin: .3rem 0 1rem;
+    }
+    .focal-meta, .turn-meta {
+        color: var(--text-color);
+        opacity: .72;
+        font-size: .86rem;
+        margin-bottom: .45rem;
+    }
+    .turn {
+        border-left: 3px solid var(--text-color);
+        padding: .55rem .8rem;
+        margin: .45rem 0;
+    }
+    .context-heading {
+        border-left: 3px solid var(--primary-color);
+        padding: .55rem .8rem;
+        margin: .45rem 0;
+        font-weight: 600;
+    }
+    .na {color:var(--text-color);opacity:.72;font-style:italic;padding:.35rem 0}
     </style>""",
         unsafe_allow_html=True,
     )

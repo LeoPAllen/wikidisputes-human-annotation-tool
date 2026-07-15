@@ -22,6 +22,8 @@ def test_app_coder_entry_and_first_focal(monkeypatch, synthetic_project):
     assert not any(">Reply<" in markdown.value for markdown in app.markdown)
     forbidden = ("escalated", "dispute_resolution_url", "Dispute_Rationales", "Validation_Audit")
     rendered = "\n".join(str(element.value) for element in app.markdown)
+    assert "color: var(--text-color)" in rendered
+    assert "background: var(--secondary-background-color)" in rendered
     assert not any(name in rendered for name in forbidden)
 
     def submit_negative_turn(test_app):
