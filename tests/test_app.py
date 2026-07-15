@@ -50,6 +50,8 @@ def test_new_utterance_stage_one_and_reading_hierarchy(monkeypatch, synthetic_pr
     assert "max-width: 78ch" in rendered and "white-space: pre-wrap" in rendered
     assert "background: var(--secondary-background-color)" in rendered
     assert "Dispute D1" not in rendered and "ID u1" not in rendered
+    assert "Yes = a substantive article- or dispute-related position" in rendered
+    assert "1 = a substantive article- or dispute-related position" not in rendered
     assert not any(label in {radio.label for radio in app.radio} for label in ("Coder confidence", "Flag for review"))
     assert not app.text_area
 

@@ -383,7 +383,7 @@ with coding.container(height=700, border=False, key="coding_pane"):
         values[name] = value
         if value is not None:
             answered.add(name)
-        guide(name, codebook.fields[name])
+        guide(name, codebook.fields[name], binary=True)
 
     def save_result(result, submit: bool):
         stored_answered = answered & applicable_fields(result.payload, context, config.low_confidence_threshold)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import re
 
 import pandas as pd
 import streamlit as st
@@ -117,10 +118,15 @@ def turn_card(row: pd.Series, reason: str | None = None) -> None:
         prior_comment(row, (reason,) if reason else ())
 
 
-def guide(label: str, item: FieldGuide) -> None:
+def binary_guidance_text(value: str) -> str:
+    """Translate stored binary codes into the labels shown by binary controls."""
+    return re.sub(r"(?<!\d)[01](?!\d)", lambda match: "Yes" if match.group() == "1" else "No", value)
+
+
+def guide(label: str, item: FieldGuide, *, binary: bool = False) -> None:
     st.caption(item.definition)
     with st.expander(f"Coding guidance — {label}"):
-        st.write(item.rule)
+        st.write(binary_guidance_text(item.rule) if binary else item.rule)
         if item.example:
             st.markdown(f"**Example:** {item.example}")
 
