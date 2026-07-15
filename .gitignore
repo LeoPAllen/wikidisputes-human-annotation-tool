@@ -1,0 +1,45 @@
+# Operating-system and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
+
+# Python environments, bytecode, and tooling caches
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Packaging output
+build/
+dist/
+*.egg-info/
+
+# Local annotation state and SQLite sidecars
+data/local/*
+!data/local/.gitkeep
+*.sqlite3-wal
+*.sqlite3-shm
+*.sqlite3-journal
+
+# Generated exports and QC reports; retain empty directories
+exports/*
+!exports/.gitkeep
+reports/*
+!reports/.gitkeep
+
+# Only the two authoritative source workbooks belong in version control
+data/source/*
+!data/source/codebook.xlsx
+!data/source/gold_input.xlsx

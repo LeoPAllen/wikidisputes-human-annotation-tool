@@ -1,0 +1,10 @@
+schema_version = "0.9.7"
+schema_sheet = "Core_Schema_SIMPLIFIED"
+phase = "calibration"
+schema_locked = false
+low_confidence_threshold = 2
+gold_path = "data/source/gold_input.xlsx"
+codebook_path = "data/source/codebook.xlsx"
+database_path = "data/local/annotations.sqlite3"
+export_directory = "exports"
+

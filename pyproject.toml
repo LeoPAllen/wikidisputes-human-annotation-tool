@@ -1,0 +1,15 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "S"]
+ignore = ["E501", "E701", "E702", "S101"]
+
+[tool.ruff.lint.per-file-ignores]
+"app.py" = ["B018"]
+"tests/*" = ["S101"]
