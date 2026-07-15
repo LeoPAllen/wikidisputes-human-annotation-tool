@@ -32,6 +32,7 @@ AUDIT_FIELDS = {
     "review_flag",
     "coder_notes",
 }
+ALL_FIELDS = ALL_LABELS | AUDIT_FIELDS
 
 
 @dataclass(frozen=True)
@@ -51,23 +52,39 @@ class ValidationResult:
         return not self.errors
 
 
-def applicable_fields(values: dict[str, Any], context: ContextState) -> set[str]:
-    applicable = set(BASE_BINARY) | {"coder_confidence", "review_flag"}
+def applicable_fields(values: dict[str, Any], context: ContextState, low_threshold: int = 2) -> set[str]:
+    applicable = set(BASE_BINARY) | {"coder_confidence", "review_flag", "coder_notes"}
     if values.get("KS_present") == 1:
-        applicable.update(KS_FIELDS)
+        applicable.update(KS_FIELDS + ("KS_evidence_span",))
         if context.earlier_ks:
             applicable.add("KS_repetition_or_restaking")
+            if values.get("KS_repetition_or_restaking") == 1:
+                applicable.add("KS_prior_utterance_ids")
         if values.get("KS_evidence_present") == 1:
             applicable.update(("KS_evidence_type", "KS_warrant_explicit"))
     if values.get("KI_present") == 1:
-        applicable.update(KI_FIELDS)
+        applicable.update(KI_FIELDS + ("KI_evidence_span",))
         if context.earlier_candidate:
-            applicable.add("KI_iterate_on_candidate_action")
+            applicable.update(("KI_iterate_on_candidate_action", "KI_explicit_feedback"))
         if context.earlier_ks:
             applicable.add("KI_prior_stake_reflection")
-    if context.earlier_candidate:
-        applicable.add("KI_explicit_feedback")
-    applicable.update(AUDIT_FIELDS - {"coder_confidence", "review_flag"})
+        feedback = values.get("KI_explicit_feedback")
+        reflection = values.get("KI_prior_stake_reflection")
+        if (
+            values.get("KI_iterate_on_candidate_action") == 1
+            or feedback in {"accept", "reject", "mixed_or_conditional"}
+            or isinstance(reflection, int)
+            and reflection > 1
+        ):
+            applicable.add("KI_upstream_utterance_ids")
+    if values.get("C_interpersonal_hostility") == 1 or values.get("C_formal_escalation_signal") == 1:
+        applicable.add("control_evidence_span")
+    if (
+        values.get("review_flag") == 1
+        or isinstance(values.get("coder_confidence"), int)
+        and values["coder_confidence"] <= low_threshold
+    ):
+        applicable.add("short_justification")
     return applicable
 
 
@@ -81,8 +98,8 @@ def normalize_and_validate(
 ) -> ValidationResult:
     payload = dict(values)
     errors: dict[str, str] = {}
-    applicable = applicable_fields(payload, context)
-    for label in ALL_LABELS - applicable:
+    applicable = applicable_fields(payload, context, low_threshold)
+    for label in ALL_FIELDS - applicable:
         payload[label] = None
     required = set(BASE_BINARY) | {"coder_confidence", "review_flag"}
     if payload.get("KS_present") == 1:
@@ -98,7 +115,7 @@ def normalize_and_validate(
             required.add("KI_iterate_on_candidate_action")
         if context.earlier_ks:
             required.add("KI_prior_stake_reflection")
-    if context.earlier_candidate:
+    if payload.get("KI_present") == 1 and context.earlier_candidate:
         required.add("KI_explicit_feedback")
     if payload.get("C_interpersonal_hostility") == 1 or payload.get("C_formal_escalation_signal") == 1:
         required.add("control_evidence_span")

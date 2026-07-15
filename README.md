@@ -27,6 +27,10 @@ Codebook evolution is tracked independently of the dataset by `schema_version` p
 
 Before distributing a study copy, run validation and all checks below. Back up the SQLite file regularly. Exports contain `Gold_Annotations`, coder-specific current dispute decisions and event histories, registered schema versions, and the QC report. Context rows remain in source order and have blank utterance annotation/provenance fields.
 
+Each utterance is coded in two local stages. The first records the four KS, KI, hostility, and formal-escalation gateway judgments as a durable draft. The second shows only details and evidence that apply, followed by confidence and review. Reopening a draft with all gateways answered resumes at the detail stage; the same utterance timer and append-only event history are retained.
+
+The reading pane shows the source section heading once, the focal utterance, and strictly earlier substantive turns. Source text is escaped and rendered with its original whitespace. Raw IDs remain available in the collapsed source details rather than dominating the reading surface.
+
 Coder-facing hiding of `escalated`, outcomes, administrative sampling fields, `dispute_resolution_url`, `Dispute_Rationales`, and `Validation_Audit` is UI blinding, not filesystem access control. The master XLSX still contains administrative data. Hard blinding requires distributing a separately sanitized workbook/repository.
 
 ## Verification and troubleshooting

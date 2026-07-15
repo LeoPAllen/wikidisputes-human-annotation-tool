@@ -1,4 +1,4 @@
-from wikidisputes_ui.models import ContextState, normalize_and_validate
+from wikidisputes_ui.models import ContextState, applicable_fields, normalize_and_validate
 
 
 EVIDENCE = {"external_source_or_quote"}
@@ -17,16 +17,51 @@ def complete_base(**updates):
     return values
 
 
-def test_null_semantics_and_answered_null_feedback():
+def test_feedback_is_inapplicable_and_normalized_when_ki_is_absent():
     context = ContextState(("u1",), earlier_candidate=True)
-    values = complete_base(KI_explicit_feedback=None)
-    answered = set(values) | {"KI_explicit_feedback"}
+    values = complete_base(KI_explicit_feedback="accept")
+    answered = set(values)
     result = normalize_and_validate(values, answered, context, EVIDENCE)
     assert result.valid
     assert result.payload["KI_explicit_feedback"] is None
     assert result.payload["KS_warrant_explicit"] is None
+    assert "KI_explicit_feedback" not in applicable_fields(values, context)
+
+
+def test_answered_null_feedback_is_required_when_ki_and_candidate_apply():
+    context = ContextState(("u1",), earlier_candidate=True)
+    values = complete_base(
+        KI_present=1,
+        KI_propose_action=0,
+        KI_announce_enacted_action=0,
+        KI_solicit=0,
+        KI_iterate_on_candidate_action=0,
+        KI_explicit_feedback=None,
+        KI_evidence_span="integration language",
+    )
+    answered = set(values)
+    assert normalize_and_validate(values, answered, context, EVIDENCE).valid
     unanswered = normalize_and_validate(values, answered - {"KI_explicit_feedback"}, context, EVIDENCE)
     assert "KI_explicit_feedback" in unanswered.errors
+
+
+def test_conditional_audit_applicability():
+    context = ContextState(("u1",), earlier_ks=True, earlier_candidate=True)
+    base = complete_base()
+    assert applicable_fields(base, context) == {
+        "KS_present",
+        "KI_present",
+        "C_interpersonal_hostility",
+        "C_formal_escalation_signal",
+        "coder_confidence",
+        "review_flag",
+        "coder_notes",
+    }
+    ks = complete_base(KS_present=1, KS_evidence_present=0, KS_repetition_or_restaking=1)
+    assert {"KS_evidence_span", "KS_prior_utterance_ids"} <= applicable_fields(ks, context)
+    controls = complete_base(C_interpersonal_hostility=1)
+    assert "control_evidence_span" in applicable_fields(controls, context)
+    assert "KI_evidence_span" not in applicable_fields(controls, context)
 
 
 def test_dependencies_upstream_and_justification():

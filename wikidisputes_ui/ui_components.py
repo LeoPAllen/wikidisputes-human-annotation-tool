@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import html
-import streamlit as st
+
 import pandas as pd
+import streamlit as st
 
 from .codebook import FieldGuide
 from .ingest import article_title
@@ -13,37 +14,107 @@ from .ingest import article_title
 def inject_css() -> None:
     st.markdown(
         """<style>
-    .focal, .turn, .context-heading {
-        color: var(--text-color);
+    .reading-page-label, .comment-signature, .source-relation {
+        color: var(--text-color); opacity: .72;
+    }
+    .reading-page-label {font-size: .82rem; margin-bottom: .2rem;}
+    .discussion-heading {
+        color: var(--text-color); font-family: Georgia, 'Times New Roman', serif;
+        font-size: 1.3rem; font-weight: 600; line-height: 1.25;
+        border-bottom: 1px solid color-mix(in srgb, var(--text-color) 32%, transparent);
+        padding-bottom: .25rem; margin: .1rem 0 1rem;
+    }
+    .focal-comment, .prior-comment {
+        color: var(--text-color); overflow-wrap: anywhere;
+    }
+    .focal-comment {
+        border-left: 4px solid var(--primary-color); padding: .85rem 1rem;
         background: var(--secondary-background-color);
+        background: color-mix(in srgb, var(--secondary-background-color) 78%, transparent);
+        border-radius: .25rem; margin: .25rem 0 1rem;
     }
-    .focal {
-        border-left: 5px solid var(--primary-color);
-        padding: 1.1rem 1.25rem;
-        border-radius: .35rem;
-        margin: .3rem 0 1rem;
-    }
-    .focal-meta, .turn-meta {
-        color: var(--text-color);
-        opacity: .72;
-        font-size: .86rem;
-        margin-bottom: .45rem;
-    }
-    .turn {
-        border-left: 3px solid var(--text-color);
-        padding: .55rem .8rem;
-        margin: .45rem 0;
-    }
-    .context-heading {
-        border-left: 3px solid var(--primary-color);
-        padding: .55rem .8rem;
-        margin: .45rem 0;
-        font-weight: 600;
+    .current-label {font-size: .78rem; font-weight: 700; letter-spacing: .02em; margin-bottom: .45rem;}
+    .source-text {white-space: pre-wrap; max-width: 78ch; line-height: 1.58; overflow-wrap: anywhere;}
+    .comment-signature {font-size: .84rem; margin-top: .55rem;}
+    .source-relation {font-size: .82rem; margin: -.4rem 0 .7rem;}
+    .prior-comment {padding: .6rem .75rem; margin: .45rem 0; border-left: 2px solid var(--primary-color);}
+    .badge {
+        display: inline-block; font-size: .72rem; line-height: 1.2; padding: .14rem .42rem;
+        margin: 0 .25rem .25rem 0; border: 1px solid currentColor; border-radius: 999px; opacity: .82;
     }
     .na {color:var(--text-color);opacity:.72;font-style:italic;padding:.35rem 0}
     </style>""",
         unsafe_allow_html=True,
     )
+
+
+def safe_source_text(value: object) -> str:
+    """Escape source content while retaining its exact whitespace for CSS rendering."""
+    return html.escape("" if pd.isna(value) else str(value), quote=True)
+
+
+def badge(label: str) -> str:
+    return f'<span class="badge">{html.escape(label)}</span>'
+
+
+def signature(row: pd.Series) -> str:
+    speaker = html.escape(str(row.get("speaker_id", "")))
+    timestamp = html.escape(str(row.get("timestamp", "")))
+    return f'<div class="comment-signature">{speaker} · {timestamp}</div>'
+
+
+def discussion_heading(row: pd.Series) -> None:
+    st.markdown(
+        f'<div class="reading-page-label">{html.escape(article_title(row))}</div>'
+        f'<div class="discussion-heading">{safe_source_text(row.get("utterance_text"))}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def focal_card(row: pd.Series, reply_description: str | None = None) -> None:
+    type_badge = "" if str(row.get("utterance_type", "")).lower() == "talk" else badge(str(row["utterance_type"]))
+    order_badge = badge(f"#{int(row['utterance_order'])}")
+    st.markdown(
+        '<div class="focal-comment"><div class="current-label">Current utterance</div>'
+        f"{order_badge}{type_badge}"
+        f'<div class="source-text">{safe_source_text(row.get("utterance_text"))}</div>'
+        f"{signature(row)}</div>"
+        + (f'<div class="source-relation">{html.escape(reply_description)}</div>' if reply_description else ""),
+        unsafe_allow_html=True,
+    )
+
+
+def prior_comment(row: pd.Series, badges: tuple[str, ...] = ()) -> None:
+    rendered_badges = "".join(badge(item) for item in badges)
+    st.markdown(
+        f'<div class="prior-comment">{rendered_badges}'
+        f'<div class="source-text">{safe_source_text(row.get("utterance_text"))}</div>'
+        f"{signature(row)}</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def source_details(row: pd.Series) -> None:
+    with st.expander("Source details"):
+        for label, name in (
+            ("Utterance ID", "utterance_id"),
+            ("Dispute ID", "dispute_id"),
+            ("Original ID", "original_id"),
+            ("Reply ID", "reply_to_utterance_id"),
+            ("Source row", "_source_row"),
+            ("Utterance type", "utterance_type"),
+        ):
+            value = row.get(name)
+            if value is not None and not pd.isna(value):
+                st.text(f"{label}: {value}")
+
+
+def turn_card(row: pd.Series, reason: str | None = None) -> None:
+    """Compact full-dispute rendering used only on the post-dispute screen."""
+    if row.get("utterance_role") == "context":
+        discussion_heading(row)
+    else:
+        prior_comment(row, (reason,) if reason else ())
 
 
 def guide(label: str, item: FieldGuide) -> None:
@@ -54,29 +125,6 @@ def guide(label: str, item: FieldGuide) -> None:
             st.markdown(f"**Example:** {item.example}")
 
 
-def focal_card(row: pd.Series) -> None:
-    target = (
-        ""
-        if pd.isna(row.get("reply_to_utterance_id"))
-        else f" · Reply to {html.escape(str(row['reply_to_utterance_id']))}"
-    )
-    st.markdown(
-        f"""<div class="focal"><div class="focal-meta"><strong>{html.escape(article_title(row))}</strong> · Dispute {html.escape(str(row["dispute_id"]))} · Utterance #{int(row["utterance_order"])}<br>{html.escape(str(row["speaker_id"]))} · {html.escape(str(row["timestamp"]))} · ID {html.escape(str(row["utterance_id"]))} · {html.escape(str(row["utterance_type"]))}{target}</div><div>{html.escape(str(row["utterance_text"])).replace(chr(10), "<br>")}</div></div>""",
-        unsafe_allow_html=True,
-    )
-
-
-def turn_card(row: pd.Series, reason: str | None = None) -> None:
-    prefix = f"<strong>{html.escape(reason)}</strong><br>" if reason else ""
-    is_context = row.get("utterance_role") == "context"
-    css_class = "context-heading" if is_context else "turn"
-    role = "Conversation heading · " if is_context else ""
-    st.markdown(
-        f"<div class='{css_class}'>{prefix}<div class='turn-meta'>{role}#{int(row['utterance_order'])} · {html.escape(str(row['speaker_id']))} · {html.escape(str(row['timestamp']))} · {html.escape(str(row['utterance_id']))}</div>{html.escape(str(row['utterance_text'])).replace(chr(10), '<br>')}</div>",
-        unsafe_allow_html=True,
-    )
-
-
 def binary_control(label: str, key: str, value: int | None = None) -> int | None:
     options = [0, 1]
     index = options.index(value) if value in options else None
@@ -85,6 +133,5 @@ def binary_control(label: str, key: str, value: int | None = None) -> int | None
     )
 
 
-def not_applicable(label: str) -> None:
-    st.markdown(f"**{label}**")
-    st.markdown("<div class='na'>Not applicable</div>", unsafe_allow_html=True)
+def canonical_caption(name: str) -> None:
+    st.caption(f"Codebook field: `{name}`")
