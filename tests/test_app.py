@@ -89,16 +89,37 @@ def test_conditional_review_and_submission_navigation(monkeypatch, synthetic_pro
     confidence.set_value(5)
     review.set_value(0)
     app = app.run()
-    assert not any(area.label == "Short justification" for area in app.text_area)
+    justification = next(area for area in app.text_area if area.label == "Short justification")
+    assert justification.disabled
     next(radio for radio in app.radio if radio.label == "Coder confidence").set_value(2)
     app = app.run()
-    assert any(area.label == "Short justification" for area in app.text_area)
+    justification = next(area for area in app.text_area if area.label == "Short justification")
+    assert not justification.disabled
+    assert any("Required because confidence is low" in caption.value for caption in app.caption)
     app = next(button for button in app.button if button.label == "Submit and next").click().run()
     assert any("short_justification" in error.value for error in app.error)
     next(area for area in app.text_area if area.label == "Short justification").input("Needs review")
     app = next(button for button in app.button if button.label == "Submit and next").click().run()
     assert {radio.label for radio in app.radio} == GATEWAYS
     assert app.session_state["annotation_stage"] == 1
+
+
+def test_coder_notes_explain_when_they_are_recorded(monkeypatch, synthetic_project):
+    app = enter_first_utterance(configured_app(monkeypatch, synthetic_project))
+    app = set_gateways(app)
+    app = next(button for button in app.button if button.label == "Continue to details").click().run()
+    app = enter_first_utterance(configured_app(monkeypatch, synthetic_project))
+
+    assert any("Notes are recorded when you save a draft or submit" in caption.value for caption in app.caption)
+    next(area for area in app.text_area if area.label == "Coder notes").input("Check context")
+    app = app.run()
+    assert any("Coder notes entered" in caption.value for caption in app.caption)
+    app = next(button for button in app.button if button.label == "Save draft").click().run()
+    assert any("Draft saved" in success.value for success in app.success)
+
+    reloaded = enter_first_utterance(configured_app(monkeypatch, synthetic_project))
+    notes = next(area for area in reloaded.text_area if area.label == "Coder notes")
+    assert notes.value == "Check context"
 
 
 @pytest.mark.parametrize(

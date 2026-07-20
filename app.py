@@ -593,19 +593,28 @@ with coding.container(height=700, border=False, key="coding_pane"):
             and values["coder_confidence"] <= config.low_confidence_threshold
         )
         if needs_justification:
-            values["short_justification"] = st.text_area(
-                "Short justification",
-                value=values.get("short_justification") or "",
-                key=f"text_short_justification_{uid}",
+            st.caption("Required because confidence is low or this utterance is flagged for review.")
+        else:
+            st.caption(
+                "Short justification becomes required when confidence is "
+                f"{config.low_confidence_threshold} or lower, or when the utterance is flagged for review."
             )
-            if values["short_justification"].strip():
-                answered.add("short_justification")
+        values["short_justification"] = st.text_area(
+            "Short justification",
+            value=values.get("short_justification") or "",
+            key=f"text_short_justification_{uid}",
+            disabled=not needs_justification,
+        )
+        if values["short_justification"].strip():
+            answered.add("short_justification")
         with st.expander("Optional coder notes"):
+            st.caption("Optional. Notes are recorded when you save a draft or submit the annotation.")
             values["coder_notes"] = st.text_area(
                 "Coder notes", value=values.get("coder_notes") or "", key=f"text_coder_notes_{uid}"
             )
             if values["coder_notes"].strip():
                 answered.add("coder_notes")
+                st.caption("Coder notes entered; save the draft or submit to record them.")
 
         draft_col, submit_col = st.columns(2)
         if draft_col.button("Save draft", use_container_width=True):
