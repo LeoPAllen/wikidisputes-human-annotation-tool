@@ -104,13 +104,19 @@ def test_ordinal_and_evidence_values():
     assert "KS_evidence_type" in result.errors
 
 
-def test_positive_ks_always_requires_evidence_span():
+def test_positive_ks_and_ki_allow_optional_evidence_spans():
     values = complete_base(
         KS_present=1,
         KS_problem_claim_specified=1,
         KS_evidence_present=0,
         KS_acceptability_condition=0,
         KS_derailment=0,
+        KI_present=1,
+        KI_propose_action=0,
+        KI_announce_enacted_action=0,
+        KI_solicit=0,
     )
     result = normalize_and_validate(values, set(values), ContextState(), EVIDENCE)
-    assert "KS_evidence_span" in result.errors
+    assert result.valid
+    assert result.payload.get("KS_evidence_span") is None
+    assert result.payload.get("KI_evidence_span") is None

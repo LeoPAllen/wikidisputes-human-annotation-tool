@@ -104,13 +104,12 @@ def normalize_and_validate(
     required = set(BASE_BINARY) | {"coder_confidence", "review_flag"}
     if payload.get("KS_present") == 1:
         required.update(KS_FIELDS)
-        required.add("KS_evidence_span")
         if context.earlier_ks:
             required.add("KS_repetition_or_restaking")
         if payload.get("KS_evidence_present") == 1:
             required.update(("KS_evidence_type", "KS_warrant_explicit"))
     if payload.get("KI_present") == 1:
-        required.update(set(KI_FIELDS) | {"KI_evidence_span"})
+        required.update(KI_FIELDS)
         if context.earlier_candidate:
             required.add("KI_iterate_on_candidate_action")
         if context.earlier_ks:
