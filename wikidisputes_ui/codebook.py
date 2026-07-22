@@ -54,6 +54,16 @@ def _clean(value: object) -> str:
     return "" if pd.isna(value) else str(value).strip()
 
 
+def file_fingerprint(path: str | Path) -> str:
+    """Return the canonical identity of an input file."""
+    return sha256(Path(path).read_bytes()).hexdigest()
+
+
+def schema_id(file_hash: str) -> str:
+    """Return a compact display/storage label derived from the canonical hash."""
+    return f"schema-{file_hash[:12]}"
+
+
 def load_codebook(path: str | Path, schema_sheet: str = "Core_Schema_SIMPLIFIED") -> Codebook:
     path = Path(path)
     schema = pd.read_excel(path, sheet_name=schema_sheet, dtype=object)
@@ -83,4 +93,4 @@ def load_codebook(path: str | Path, schema_sheet: str = "Core_Schema_SIMPLIFIED"
         for _, row in objects.iterrows()
         if _clean(row["Primary dispute object"])
     }
-    return Codebook(fields, evidence_types, dispute_objects, sha256(path.read_bytes()).hexdigest(), path.name)
+    return Codebook(fields, evidence_types, dispute_objects, file_fingerprint(path), path.name)

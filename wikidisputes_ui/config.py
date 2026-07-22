@@ -14,7 +14,6 @@ class ProjectConfig:
     codebook_path: Path
     database_path: Path
     export_directory: Path
-    schema_version: str
     schema_sheet: str
     annotation_sheet: str
     schema_locked: bool
@@ -32,7 +31,6 @@ def load_config(path: str | Path = "config/project.toml") -> ProjectConfig:
         codebook_path=resolve("codebook_path"),
         database_path=resolve("database_path"),
         export_directory=resolve("export_directory"),
-        schema_version=str(values["schema_version"]),
         schema_sheet=str(values["schema_sheet"]),
         annotation_sheet=str(values["annotation_sheet"]),
         schema_locked=bool(values["schema_locked"]),

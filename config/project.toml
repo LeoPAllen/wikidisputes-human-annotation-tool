@@ -1,4 +1,3 @@
-schema_version = "0.9.84"
 schema_sheet = "Core_Schema_SIMPLIFIED"
 annotation_sheet = "Gold_Annotation"
 schema_locked = false

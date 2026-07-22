@@ -9,7 +9,7 @@ import time
 import pandas as pd
 import streamlit as st
 
-from wikidisputes_ui.codebook import load_codebook
+from wikidisputes_ui.codebook import file_fingerprint, load_codebook, schema_id
 from wikidisputes_ui.config import load_config
 from wikidisputes_ui.export import build_export, safe_export_name
 from wikidisputes_ui.ingest import article_title, read_gold
@@ -30,26 +30,40 @@ from wikidisputes_ui.validation import render_report, validate_inputs
 st.set_page_config(page_title="WikiDisputes annotation", page_icon="✎", layout="wide")
 inject_css()
 
+config_path = os.environ.get("WIKIDISPUTES_CONFIG", "config/project.toml")
+initial_config = load_config(config_path)
+
+
+def cache_fingerprint(path):
+    return file_fingerprint(path) if path.is_file() else f"missing:{path}"
+
 
 def opened_at() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 @st.cache_resource
-def resources():
-    config = load_config(os.environ.get("WIKIDISPUTES_CONFIG", "config/project.toml"))
+def resources(config_file: str, codebook_fingerprint: str, gold_fingerprint: str):
+    del codebook_fingerprint, gold_fingerprint  # Values are cache keys; loading below remains authoritative.
+    config = load_config(config_file)
     qc = validate_inputs(config)
     if qc.blocking:
         return config, qc, None, None, None
     codebook = load_codebook(config.codebook_path, config.schema_sheet)
     dataset = read_gold(config.gold_path, config.annotation_sheet)
     storage = Storage(config.database_path)
-    storage.register_schema(config.schema_version, codebook.file_hash, codebook.source_filename, config.schema_locked)
+    storage.register_schema(
+        schema_id(codebook.file_hash), codebook.file_hash, codebook.source_filename, config.schema_locked
+    )
     return config, qc, codebook, dataset, storage
 
 
 try:
-    config, qc, codebook, dataset, storage = resources()
+    config, qc, codebook, dataset, storage = resources(
+        str(config_path),
+        cache_fingerprint(initial_config.codebook_path),
+        cache_fingerprint(initial_config.gold_path),
+    )
 except SchemaDriftError as exc:
     st.error(f"Schema registration stopped: {exc}")
     st.stop()
@@ -64,6 +78,7 @@ if qc.blocking:
     st.stop()
 
 coder = storage.active_coder()
+active_schema_id = schema_id(codebook.file_hash)
 if coder is None:
     st.title("WikiDisputes annotation")
     st.info(
@@ -80,7 +95,7 @@ if coder is None:
     st.stop()
 
 st.sidebar.caption(f"Coder: **{coder}**")
-st.sidebar.caption(f"Schema: **{config.schema_version}**")
+st.sidebar.caption(f"Schema: **{active_schema_id}**")
 if st.sidebar.button("Switch coder"):
     st.session_state.confirm_switch = True
 if st.session_state.get("confirm_switch"):
@@ -91,8 +106,7 @@ if st.session_state.get("confirm_switch"):
         st.session_state.clear()
         st.rerun()
 
-qc_text = render_report(qc, config)
-export_data = build_export(storage, dataset, coder, qc_text, config.schema_version, codebook.file_hash)
+export_data = build_export(storage, dataset, coder, active_schema_id, codebook.file_hash)
 st.sidebar.download_button(
     "Export my annotations",
     export_data,
@@ -109,21 +123,20 @@ st.sidebar.download_button(
 frame = dataset.annotatable_rows
 annotatable_ids = set(frame["utterance_id"].astype(str))
 dispute_ids = set(frame["dispute_id"].astype(str))
-submitted_rows = [
-    row
-    for row in storage.rows("utterance_annotations", coder)
-    if row["schema_version"] == config.schema_version and row["schema_hash"] == codebook.file_hash
-]
+all_utterance_rows = storage.rows("utterance_annotations", coder)
+submitted_rows = [row for row in all_utterance_rows if row["schema_hash"] == codebook.file_hash]
+historical_count = sum(row["schema_hash"] != codebook.file_hash for row in all_utterance_rows)
+if historical_count:
+    st.sidebar.caption(
+        f"{historical_count} annotation projection(s) use earlier codebooks. They remain in the database backup but "
+        "are excluded from this schema-locked Excel export."
+    )
 submitted = {
     str(row["utterance_id"]): row
     for row in submitted_rows
     if row["status"] == "submitted" and str(row["utterance_id"]) in annotatable_ids
 }
-dispute_rows = [
-    row
-    for row in storage.rows("dispute_annotations", coder)
-    if row["schema_version"] == config.schema_version and row["schema_hash"] == codebook.file_hash
-]
+dispute_rows = [row for row in storage.rows("dispute_annotations", coder) if row["schema_hash"] == codebook.file_hash]
 completed_disputes = {str(row["dispute_id"]) for row in dispute_rows if str(row["dispute_id"]) in dispute_ids}
 review_count = sum(bool(__import__("json").loads(row["payload_json"]).get("review_flag")) for row in submitted.values())
 
@@ -257,7 +270,7 @@ if st.session_state.page == "dispute":
                     "coder_notes": note or None,
                 },
                 answered_fields={"C_primary_dispute_object", "coder_confidence", "review_flag"},
-                schema_version=config.schema_version,
+                schema_version=active_schema_id,
                 schema_hash=codebook.file_hash,
                 opened_at=st.session_state.dispute_opened_at,
                 elapsed_wall_seconds=time.monotonic() - st.session_state.dispute_timer_start,
@@ -284,7 +297,7 @@ order = int(row["utterance_order"])
 prior = dataset.displayable_prior_context(did, order)
 earlier_turns = dataset.earlier_annotatable_turns(did, order)
 current = storage.current_utterance(coder, uid)
-if current and (current["schema_version"], current["schema_hash"]) != (config.schema_version, codebook.file_hash):
+if current and current["schema_hash"] != codebook.file_hash:
     current = None
 prior_annotations = {
     str(item["utterance_id"]): __import__("json").loads(item["payload_json"])
@@ -315,8 +328,8 @@ gateway_labels = {
 }
 field_labels = {
     "KS_claim_target_specified": "Makes at least one specific claim about a target issue",
-    "KS_evidence_present": "Presents evidence",
-    "KS_reasoning": "Explains reasoning",
+    "KS_evidence_present": "Shares supporting evidence",
+    "KS_reasoning": "Develops a line of reasoning",
     "KS_unelaborated_restaking": "Unelaborated restaking of earlier knowledge",
     "KI_propose_edit": "Proposes an edit",
     "KI_report_enacted_edit": "Reports an enacted edit",
@@ -395,7 +408,7 @@ with coding.container(height=700, border=False, key="coding_pane"):
             payload=result.payload,
             answered_fields=stored_answered,
             submit=submit,
-            schema_version=config.schema_version,
+            schema_version=active_schema_id,
             schema_hash=codebook.file_hash,
             opened_at=st.session_state.utterance_opened_at,
             elapsed_wall_seconds=time.monotonic() - st.session_state.utterance_timer_start,

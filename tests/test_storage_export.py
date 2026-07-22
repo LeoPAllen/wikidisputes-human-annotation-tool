@@ -84,18 +84,9 @@ def test_dispute_completion_export_propagation_and_isolation(tmp_path, synthetic
         opened_at="2020-01-01T00:00:00Z",
         elapsed_wall_seconds=1,
     )
-    data = build_export(storage, read_gold(synthetic_project.gold_path), "coder_1", "PASS", "0.9.7", "abc")
+    data = build_export(storage, read_gold(synthetic_project.gold_path), "coder_1", "0.9.7", "abc")
     workbook = pd.ExcelFile(BytesIO(data))
-    assert set(
-        [
-            "Gold_Annotations",
-            "Dispute_Annotations",
-            "Annotation_Events",
-            "Dispute_Events",
-            "Schema_Versions",
-            "QC_Report",
-        ]
-    ) <= set(workbook.sheet_names)
+    assert workbook.sheet_names == ["Gold_Annotations"]
     frame = pd.read_excel(BytesIO(data), sheet_name="Gold_Annotations")
     row = frame[frame.utterance_id == "u1"].iloc[0]
     assert row.C_primary_dispute_object == "wording_or_framing"
@@ -103,23 +94,25 @@ def test_dispute_completion_export_propagation_and_isolation(tmp_path, synthetic
     assert pd.isna(row.KS_evidence_type)
     context = frame[frame.utterance_role == "context"].iloc[0]
     assert pd.isna(context.coder_id) and pd.isna(context.KS_present)
-    events = pd.read_excel(BytesIO(data), sheet_name="Annotation_Events")
-    assert set(events.coder_id) == {"coder_1"}
+    assert set(frame.export_schema_id) == {"0.9.7"}
+    assert set(frame.export_schema_hash) == {"abc"}
     for sheet in workbook.sheet_names:
         columns = {str(column).casefold() for column in pd.read_excel(BytesIO(data), sheet_name=sheet, nrows=0).columns}
         assert not columns & {"partition", "phase", "split", "dataset_key", "source_namespace"}
 
 
-def test_export_filters_current_projections_to_active_schema(tmp_path, synthetic_project):
+def test_export_is_locked_to_active_schema_and_excludes_history(tmp_path, synthetic_project):
     storage = Storage(tmp_path / "db.sqlite")
     save(storage)
-    data = build_export(storage, read_gold(synthetic_project.gold_path), "coder_1", "PASS", "0.9.82", "new")
+    data = build_export(storage, read_gold(synthetic_project.gold_path), "coder_1", "0.9.82", "new")
+    workbook = pd.ExcelFile(BytesIO(data))
+    assert workbook.sheet_names == ["Gold_Annotations"]
     annotations = pd.read_excel(BytesIO(data), sheet_name="Gold_Annotations")
     row = annotations[annotations.utterance_id == "u1"].iloc[0]
     assert pd.isna(row.coder_id)
     assert {"KS_argument_strength", "KI_prior_knowledge", "C_off_topic_shift"} <= set(annotations.columns)
-    events = pd.read_excel(BytesIO(data), sheet_name="Annotation_Events")
-    assert list(events.schema_version) == ["0.9.7"]
+    assert set(annotations.export_schema_id) == {"0.9.82"}
+    assert set(annotations.export_schema_hash) == {"new"}
 
 
 def test_backup_is_consistent(tmp_path):

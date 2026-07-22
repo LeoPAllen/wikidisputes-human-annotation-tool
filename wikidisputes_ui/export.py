@@ -43,39 +43,15 @@ def _flatten(value: Any) -> Any:
     return value
 
 
-def _records(rows: list[dict[str, Any]]) -> pd.DataFrame:
-    output = []
-    for row in rows:
-        item = dict(row)
-        for key in ("payload_json", "answered_fields_json"):
-            if key in item:
-                parsed = json.loads(item.pop(key))
-                if key == "payload_json":
-                    item.update({name: _flatten(value) for name, value in parsed.items()})
-                else:
-                    item["answered_fields"] = ";".join(parsed)
-        output.append(item)
-    return pd.DataFrame(output)
-
-
 def build_export(
     storage: Storage,
     dataset: Dataset,
     coder: str,
-    qc_report: str,
-    schema_version: str,
-    schema_hash: str,
+    active_schema_id: str,
+    active_schema_hash: str,
 ) -> bytes:
-    current = [
-        row
-        for row in storage.rows("utterance_annotations", coder)
-        if row["schema_version"] == schema_version and row["schema_hash"] == schema_hash
-    ]
-    disputes = [
-        row
-        for row in storage.rows("dispute_annotations", coder)
-        if row["schema_version"] == schema_version and row["schema_hash"] == schema_hash
-    ]
+    current = [row for row in storage.rows("utterance_annotations", coder) if row["schema_hash"] == active_schema_hash]
+    disputes = [row for row in storage.rows("dispute_annotations", coder) if row["schema_hash"] == active_schema_hash]
     current_by_id = {str(row["utterance_id"]): row for row in current}
     dispute_by_id = {str(row["dispute_id"]): json.loads(row["payload_json"]) for row in disputes}
     output_rows = []
@@ -85,6 +61,8 @@ def build_export(
             for key, value in source_row.items()
             if not str(key).startswith("_")
         }
+        row["export_schema_id"] = active_schema_id
+        row["export_schema_hash"] = active_schema_hash
         is_utterance = source_row["utterance_role"] == "utterance"
         annotation = current_by_id.get(str(source_row["utterance_id"])) if is_utterance else None
         if annotation and annotation["status"] == "submitted":
@@ -102,22 +80,14 @@ def build_export(
             decision = dispute_by_id.get(str(source_row["dispute_id"]), {})
             row["C_primary_dispute_object"] = decision.get("C_primary_dispute_object")
         output_rows.append(row)
-    sheets: dict[str, pd.DataFrame] = {"Gold_Annotations": pd.DataFrame(output_rows)}
-    for column in ANNOTATION_COLUMNS - set(sheets["Gold_Annotations"].columns):
-        sheets["Gold_Annotations"][column] = None
-    for column in INTEGER_COLUMNS & set(sheets["Gold_Annotations"].columns):
-        sheets["Gold_Annotations"][column] = pd.to_numeric(sheets["Gold_Annotations"][column], errors="coerce").astype(
-            "Int64"
-        )
-    sheets["Dispute_Annotations"] = _records(disputes)
-    sheets["Annotation_Events"] = _records(storage.rows("utterance_annotation_events", coder))
-    sheets["Dispute_Events"] = _records(storage.rows("dispute_annotation_events", coder))
-    sheets["Schema_Versions"] = pd.DataFrame(storage.rows("schema_versions"))
-    sheets["QC_Report"] = pd.DataFrame({"report_line": qc_report.splitlines()})
+    frame = pd.DataFrame(output_rows)
+    for column in ANNOTATION_COLUMNS - set(frame.columns):
+        frame[column] = None
+    for column in INTEGER_COLUMNS & set(frame.columns):
+        frame[column] = pd.to_numeric(frame[column], errors="coerce").astype("Int64")
     stream = BytesIO()
     with pd.ExcelWriter(stream, engine="openpyxl") as writer:
-        for name, frame in sheets.items():
-            frame.to_excel(writer, sheet_name=name, index=False)
+        frame.to_excel(writer, sheet_name="Gold_Annotations", index=False)
     return stream.getvalue()
 
 
@@ -130,13 +100,12 @@ def write_export(
     storage: Storage,
     dataset: Dataset,
     coder: str,
-    qc_report: str,
     directory: str | Path,
-    schema_version: str,
-    schema_hash: str,
+    active_schema_id: str,
+    active_schema_hash: str,
 ) -> Path:
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / safe_export_name(coder)
-    path.write_bytes(build_export(storage, dataset, coder, qc_report, schema_version, schema_hash))
+    path.write_bytes(build_export(storage, dataset, coder, active_schema_id, active_schema_hash))
     return path

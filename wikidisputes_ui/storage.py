@@ -161,8 +161,8 @@ class Storage:
                 latest = db.execute(
                     "SELECT schema_version,file_hash FROM schema_versions ORDER BY registered_at DESC LIMIT 1"
                 ).fetchone()
-                if latest and (latest[0], latest[1]) != (version, file_hash):
-                    raise SchemaDriftError("Schema is administratively locked; the active version/hash differs.")
+                if latest and latest[1] != file_hash:
+                    raise SchemaDriftError("Schema is administratively locked; the active codebook hash differs.")
             db.execute(
                 "INSERT OR IGNORE INTO schema_versions VALUES (?,?,?,?)", (version, file_hash, source, utc_now())
             )

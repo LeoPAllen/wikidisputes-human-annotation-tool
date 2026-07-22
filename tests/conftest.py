@@ -61,14 +61,13 @@ def synthetic_project(tmp_path: Path, source_rows):
         unified.to_excel(writer, sheet_name="Gold_Annotation", index=False)
     codebook = Path("data/source/codebook.xlsx").resolve()
     return ProjectConfig(
-        tmp_path,
-        gold,
-        codebook,
-        tmp_path / "db.sqlite3",
-        tmp_path / "exports",
-        "0.9.7",
-        "Core_Schema_SIMPLIFIED",
-        "Gold_Annotation",
-        False,
-        2,
+        root=tmp_path,
+        gold_path=gold,
+        codebook_path=codebook,
+        database_path=tmp_path / "db.sqlite3",
+        export_directory=tmp_path / "exports",
+        schema_sheet="Core_Schema_SIMPLIFIED",
+        annotation_sheet="Gold_Annotation",
+        schema_locked=False,
+        low_confidence_threshold=2,
     )

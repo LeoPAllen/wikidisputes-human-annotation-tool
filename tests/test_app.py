@@ -18,7 +18,7 @@ def configured_app(monkeypatch, synthetic_project):
     st.cache_resource.clear()
     config = synthetic_project.root / "project.toml"
     config.write_text(
-        f'''schema_version="0.9.7"\nschema_sheet="Core_Schema_SIMPLIFIED"\nannotation_sheet="Gold_Annotation"\nschema_locked=false\nlow_confidence_threshold=2\ngold_path="{synthetic_project.gold_path}"\ncodebook_path="{synthetic_project.codebook_path}"\ndatabase_path="{synthetic_project.database_path}"\nexport_directory="{synthetic_project.export_directory}"\n'''
+        f'''schema_sheet="Core_Schema_SIMPLIFIED"\nannotation_sheet="Gold_Annotation"\nschema_locked=false\nlow_confidence_threshold=2\ngold_path="{synthetic_project.gold_path}"\ncodebook_path="{synthetic_project.codebook_path}"\ndatabase_path="{synthetic_project.database_path}"\nexport_directory="{synthetic_project.export_directory}"\n'''
     )
     monkeypatch.setenv("WIKIDISPUTES_CONFIG", str(config))
     return AppTest.from_file(str(Path("app.py").resolve()), default_timeout=10).run()
@@ -71,7 +71,7 @@ def test_all_negative_stage_two_and_draft_reload(monkeypatch, synthetic_project)
     assert any("No detailed fields apply" in info.value for info in app.info)
     labels = {radio.label for radio in app.radio}
     assert {"Coder confidence", "Flag for review"} <= labels
-    assert not labels & {"Presents evidence", "Proposes an edit"}
+    assert not labels & {"Shares supporting evidence", "Proposes an edit"}
     assert any(button.label == "Change presence answers" for button in app.button)
     assert not any("Not applicable" in str(markdown.value) for markdown in app.markdown)
 
@@ -128,23 +128,23 @@ def test_coder_notes_explain_when_they_are_recorded(monkeypatch, synthetic_proje
     [
         (
             {"Knowledge staking (KS)": 1},
-            {"Presents evidence", "KS evidence span"},
+            {"Shares supporting evidence", "KS evidence span"},
             {"Proposes an edit", "KI evidence span", "Control evidence span"},
         ),
         (
             {"Knowledge integration (KI)": 1},
             {"Proposes an edit", "Solicits candidate feedback", "KI evidence span"},
-            {"Presents evidence", "KS evidence span", "Control evidence span"},
+            {"Shares supporting evidence", "KS evidence span", "Control evidence span"},
         ),
         (
             {"Interpersonal attack or disrespect": 1},
             {"Control evidence span"},
-            {"Presents evidence", "KS evidence span", "Proposes an edit", "KI evidence span"},
+            {"Shares supporting evidence", "KS evidence span", "Proposes an edit", "KI evidence span"},
         ),
         (
             {"Knowledge staking (KS)": 1, "Knowledge integration (KI)": 1, "Formal governance action": 1},
             {
-                "Presents evidence",
+                "Shares supporting evidence",
                 "KS evidence span",
                 "Proposes an edit",
                 "Solicits candidate feedback",
