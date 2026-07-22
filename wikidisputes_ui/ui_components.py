@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import html
 import re
+from dataclasses import dataclass
+from typing import Mapping
 
 import pandas as pd
 import streamlit as st
@@ -44,6 +46,15 @@ def inject_css() -> None:
         margin: 0 .25rem .25rem 0; border: 1px solid currentColor; border-radius: 999px; opacity: .82;
     }
     .na {color:var(--text-color);opacity:.72;font-style:italic;padding:.35rem 0}
+    .task-heading {
+        color: var(--text-color); font-size: 1.07rem; font-weight: 650;
+        line-height: 1.35; margin: 1rem 0 .35rem;
+    }
+    .response-cue {
+        color: var(--text-color); font-size: .8rem; font-weight: 650;
+        letter-spacing: .02em; margin: .7rem 0 -.2rem;
+    }
+    .controlled-value {margin: .35rem 0; padding-left: .55rem; border-left: 2px solid var(--primary-color);}
     </style>""",
         unsafe_allow_html=True,
     )
@@ -123,17 +134,106 @@ def binary_guidance_text(value: str) -> str:
     return re.sub(r"(?<!\d)[01](?!\d)", lambda match: "Yes" if match.group() == "1" else "No", value)
 
 
-def guide(label: str, item: FieldGuide, *, binary: bool = False) -> None:
-    st.caption(item.definition)
-    with st.expander(f"Coding guidance — {label}"):
-        st.write(binary_guidance_text(item.rule) if binary else item.rule)
-        if item.example:
-            st.markdown(f"**Example:** {item.example}")
+@dataclass
+class TaskCounter:
+    """Deterministic visible numbering for one coding screen or stage."""
+
+    value: int = 0
+
+    def next(self) -> int:
+        self.value += 1
+        return self.value
 
 
-def binary_control(label: str, key: str, value: int | None = None) -> int | None:
+def task_heading(counter: TaskCounter, label: str) -> int:
+    """Render and return the next human-readable task number."""
+    number = counter.next()
+    st.markdown(f'<div class="task-heading">{number}. {html.escape(label)}</div>', unsafe_allow_html=True)
+    return number
+
+
+def guidance_panel(
+    item: FieldGuide | None,
+    *,
+    binary: bool = False,
+    description: str | None = None,
+    controlled_values: Mapping[str, str] | None = None,
+    collapse_controlled_values: bool = False,
+) -> None:
+    """Render read-only construct guidance before an answer field."""
+    with st.container(border=True):
+        if item is not None:
+            st.caption(item.definition)
+            with st.expander("Coding guidance"):
+                st.write(binary_guidance_text(item.rule) if binary else item.rule)
+                if item.example:
+                    st.markdown(f"**Example:** {item.example}")
+        elif description:
+            st.caption(description)
+            with st.expander("Coding guidance"):
+                st.write(description)
+        if controlled_values:
+            target = st.expander("Evidence-type definitions") if collapse_controlled_values else st.container()
+            with target:
+                st.markdown("**Controlled-value definitions**")
+                for name, definition in controlled_values.items():
+                    st.markdown(
+                        f'<div class="controlled-value"><strong>{html.escape(name)}</strong> — '
+                        f"{html.escape(definition)}</div>",
+                        unsafe_allow_html=True,
+                    )
+
+
+def task_intro(
+    counter: TaskCounter,
+    label: str,
+    item: FieldGuide | None = None,
+    *,
+    binary: bool = False,
+    description: str | None = None,
+    controlled_values: Mapping[str, str] | None = None,
+    collapse_controlled_values: bool = False,
+) -> int:
+    """Render a complete numbered task introduction in reading order."""
+    number = task_heading(counter, label)
+    guidance_panel(
+        item,
+        binary=binary,
+        description=description,
+        controlled_values=controlled_values,
+        collapse_controlled_values=collapse_controlled_values,
+    )
+    st.markdown('<div class="response-cue">Your answer</div>', unsafe_allow_html=True)
+    return number
+
+
+def binary_task(
+    counter: TaskCounter,
+    label: str,
+    item: FieldGuide,
+    key: str,
+    value: int | None = None,
+) -> int | None:
+    """Render heading, guidance, then an accessible binary response control."""
+    task_intro(counter, label, item, binary=True)
+    return binary_control(label, key, value, label_visibility="collapsed")
+
+
+def binary_control(
+    label: str,
+    key: str,
+    value: int | None = None,
+    *,
+    label_visibility: str = "visible",
+) -> int | None:
     options = [0, 1]
     index = options.index(value) if value in options else None
     return st.radio(
-        label, options, index=index, format_func=lambda item: "No" if item == 0 else "Yes", horizontal=True, key=key
+        label,
+        options,
+        index=index,
+        format_func=lambda item: "No" if item == 0 else "Yes",
+        horizontal=True,
+        key=key,
+        label_visibility=label_visibility,
     )

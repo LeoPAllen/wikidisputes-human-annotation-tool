@@ -2,6 +2,7 @@ from io import BytesIO
 import pandas as pd
 import pytest
 
+from wikidisputes_ui.codebook import load_codebook
 from wikidisputes_ui.export import build_export
 from wikidisputes_ui.ingest import read_gold
 from wikidisputes_ui.storage import MigrationError, SchemaDriftError, Storage
@@ -84,7 +85,8 @@ def test_dispute_completion_export_propagation_and_isolation(tmp_path, synthetic
         opened_at="2020-01-01T00:00:00Z",
         elapsed_wall_seconds=1,
     )
-    data = build_export(storage, read_gold(synthetic_project.gold_path), "coder_1", "0.9.7", "abc")
+    book = load_codebook(synthetic_project.codebook_path)
+    data = build_export(storage, read_gold(synthetic_project.gold_path), "coder_1", "0.9.7", "abc", tuple(book.fields))
     workbook = pd.ExcelFile(BytesIO(data))
     assert workbook.sheet_names == ["Gold_Annotations"]
     frame = pd.read_excel(BytesIO(data), sheet_name="Gold_Annotations")
@@ -92,8 +94,8 @@ def test_dispute_completion_export_propagation_and_isolation(tmp_path, synthetic
     assert row.C_primary_dispute_object == "wording_or_framing"
     assert row.KI_upstream_utterance_ids == "a;prior"
     assert pd.isna(row.KS_evidence_type)
-    context = frame[frame.utterance_role == "context"].iloc[0]
-    assert pd.isna(context.coder_id) and pd.isna(context.KS_present)
+    assert set(frame.utterance_id) == {"u1"}
+    assert set(book.fields) <= set(frame.columns)
     assert set(frame.export_schema_id) == {"0.9.7"}
     assert set(frame.export_schema_hash) == {"abc"}
     for sheet in workbook.sheet_names:
@@ -104,15 +106,21 @@ def test_dispute_completion_export_propagation_and_isolation(tmp_path, synthetic
 def test_export_is_locked_to_active_schema_and_excludes_history(tmp_path, synthetic_project):
     storage = Storage(tmp_path / "db.sqlite")
     save(storage)
-    data = build_export(storage, read_gold(synthetic_project.gold_path), "coder_1", "0.9.82", "new")
+    book = load_codebook(synthetic_project.codebook_path)
+    data = build_export(storage, read_gold(synthetic_project.gold_path), "coder_1", "0.9.82", "new", tuple(book.fields))
     workbook = pd.ExcelFile(BytesIO(data))
     assert workbook.sheet_names == ["Gold_Annotations"]
     annotations = pd.read_excel(BytesIO(data), sheet_name="Gold_Annotations")
-    row = annotations[annotations.utterance_id == "u1"].iloc[0]
-    assert pd.isna(row.coder_id)
-    assert {"KS_argument_strength", "KI_prior_knowledge", "C_off_topic_shift"} <= set(annotations.columns)
-    assert set(annotations.export_schema_id) == {"0.9.82"}
-    assert set(annotations.export_schema_hash) == {"new"}
+    assert annotations.empty
+    assert {
+        "KS_argument_strength",
+        "KS_warrant_reasoning",
+        "KI_solicit_feedback",
+        "KI_iterate",
+        "KI_prior_knowledge",
+        "C_off_topic_shift",
+    } <= set(annotations.columns)
+    assert not any("candidate" in str(column).lower() for column in annotations.columns)
 
 
 def test_backup_is_consistent(tmp_path):

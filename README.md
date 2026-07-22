@@ -19,15 +19,17 @@ The first screen asks for a pseudonymous coder ID. It identifies local records; 
 
 ## Data and schema
 
-`config/project.toml` names `annotation_sheet = "Gold_Annotation"`, schema `0.9.7`, and `Core_Schema_SIMPLIFIED`. Do not edit either source XLSX. The simplified schema and its controlled-value sheets are authoritative.
+`config/project.toml` names `annotation_sheet = "Gold_Annotation"` and `Core_Schema_SIMPLIFIED`. Do not edit either source XLSX. The simplified schema and its controlled-value sheets are authoritative.
 
-Codebook evolution is tracked independently of the dataset by `schema_version` plus the SHA-256 of the complete codebook. If the codebook changes, increment `schema_version`; reusing a registered version with a different hash fails closed. `schema_locked` is an optional administrative freeze and is normally `false` during annotation.
+Codebook evolution is tracked automatically by the SHA-256 of the complete codebook. The active schema label is derived from that hash; changing the workbook reloads validation and starts a separate annotation projection without a manual version edit. `schema_locked` is an optional administrative freeze and is normally `false` during annotation.
 
 ## Research workflow
 
-Before distributing a study copy, run validation and all checks below. Back up the SQLite file regularly. Exports contain `Gold_Annotations`, coder-specific current dispute decisions and event histories, registered schema versions, and the QC report. Context rows remain in source order and have blank utterance annotation/provenance fields.
+Before distributing a study copy, run validation and all checks below. Back up the SQLite file regularly. The Excel export is a flat, schema-locked `Gold_Annotations` sheet with one row per submitted focal utterance for the active coder and codebook hash. Its annotation columns follow the active simplified schema; drafts, context-only rows, obsolete schema fields, other coders, and event history are excluded. The SQLite backup retains mutable projections and append-only event history.
 
-Each utterance is coded in two local stages. The first records the four KS, KI, hostility, and formal-escalation gateway judgments as a durable draft. The second shows only details and evidence that apply, followed by confidence and review. Reopening a draft with all gateways answered resumes at the detail stage; the same utterance timer and append-only event history are retained.
+Each utterance is coded in two local stages. The first records five KS, KI, and control gateway judgments as a durable draft. The second shows only details and evidence that apply, followed by confidence and review. Every visible coding task has deterministic numbering and presents its definition and expandable guidance before the answer control. Reopening a draft with all gateways answered resumes at the detail stage; the same utterance timer and append-only event history are retained.
+
+The navigation panel can return to the immediately previous substantive utterance, the workspace, or another dispute. Opening an incomplete dispute always chooses its earliest unsubmitted utterance, so navigation cannot jump ahead of an unresolved chronological gap. Completed disputes remain available for utterance and dispute-decision review. Meaningful utterance edits are normalized and saved as a non-submitted draft before navigation; unchanged screens create no event. Because dispute decisions do not have drafts, navigation with unsaved dispute changes requires explicit discard confirmation.
 
 The reading pane shows the source section heading once, the focal utterance, and strictly earlier substantive turns. Source text is escaped and rendered with its original whitespace. Raw IDs remain available in the collapsed source details rather than dominating the reading surface.
 
@@ -43,6 +45,6 @@ Coder-facing hiding of `escalated`, outcomes, administrative sampling fields, `d
 ```
 
 - Missing sheet or columns: restore the authoritative `Gold_Annotation` worksheet; do not repair rows in application code.
-- Codebook hash mismatch: increment `schema_version` after the directions change.
+- Codebook change: refresh the app; its hash-derived schema identity and cache key update automatically.
 - Legacy database collision: migration stops before changes and identifies the colliding coder/unit records. Reconcile or archive them in a copy, then retry.
 - Timing is best-effort wall time for an opened screen; it is not active-attention tracking.

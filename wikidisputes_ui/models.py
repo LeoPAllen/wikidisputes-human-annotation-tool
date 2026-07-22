@@ -12,8 +12,8 @@ BASE_BINARY = (
     "C_interpersonal_attack_or_disrespect",
     "C_formal_governance_action",
 )
-KS_FIELDS = ("KS_claim_target_specified", "KS_evidence_present", "KS_reasoning")
-KI_FIELDS = ("KI_propose_edit", "KI_report_enacted_edit", "KI_solicit_candidate_feedback")
+KS_FIELDS = ("KS_claim_target_specified", "KS_evidence_present", "KS_warrant_reasoning")
+KI_FIELDS = ("KI_propose_edit", "KI_report_enacted_edit", "KI_solicit_feedback")
 ALL_LABELS = set(
     BASE_BINARY
     + KS_FIELDS
@@ -22,7 +22,7 @@ ALL_LABELS = set(
         "KS_evidence_type",
         "KS_argument_strength",
         "KS_unelaborated_restaking",
-        "KI_iterate_on_candidate_edit",
+        "KI_iterate",
         "KI_explicit_feedback",
         "KI_prior_knowledge",
     )
@@ -45,7 +45,7 @@ ALL_FIELDS = ALL_LABELS | AUDIT_FIELDS
 class ContextState:
     earlier_ids: tuple[str, ...] = ()
     earlier_ks: bool = False
-    earlier_candidate: bool = False
+    earlier_ki_attempt: bool = False
 
 
 @dataclass
@@ -61,12 +61,11 @@ class ValidationResult:
 def applicable_fields(values: dict[str, Any], context: ContextState, low_threshold: int = 2) -> set[str]:
     applicable = set(BASE_BINARY) | {
         "coder_confidence",
-        "short_justification",
         "review_flag",
         "coder_notes",
     }
     if values.get("KS_present") == 1:
-        applicable.update(KS_FIELDS + ("KS_evidence_span",))
+        applicable.update(KS_FIELDS)
         if context.earlier_ks:
             applicable.add("KS_unelaborated_restaking")
             if values.get("KS_unelaborated_restaking") == 1:
@@ -74,18 +73,18 @@ def applicable_fields(values: dict[str, Any], context: ContextState, low_thresho
         if values.get("KS_evidence_present") == 1:
             applicable.add("KS_evidence_type")
         if values.get("KS_claim_target_specified") == 1 and (
-            values.get("KS_evidence_present") == 1 or values.get("KS_reasoning") == 1
+            values.get("KS_evidence_present") == 1 or values.get("KS_warrant_reasoning") == 1
         ):
             applicable.add("KS_argument_strength")
     if values.get("KI_present") == 1:
         applicable.update(KI_FIELDS + ("KI_evidence_span",))
-        if context.earlier_candidate:
-            applicable.update(("KI_iterate_on_candidate_edit", "KI_explicit_feedback"))
+        if context.earlier_ki_attempt:
+            applicable.update(("KI_iterate", "KI_explicit_feedback"))
         if context.earlier_ks:
             applicable.add("KI_prior_knowledge")
         feedback = values.get("KI_explicit_feedback")
         if (
-            values.get("KI_iterate_on_candidate_edit") == 1
+            values.get("KI_iterate") == 1
             or feedback in {"accept", "reject", "mixed_or_conditional"}
             or values.get("KI_prior_knowledge") == 1
         ):
@@ -116,24 +115,18 @@ def normalize_and_validate(
         if payload.get("KS_evidence_present") == 1:
             required.add("KS_evidence_type")
         if payload.get("KS_claim_target_specified") == 1 and (
-            payload.get("KS_evidence_present") == 1 or payload.get("KS_reasoning") == 1
+            payload.get("KS_evidence_present") == 1 or payload.get("KS_warrant_reasoning") == 1
         ):
             required.add("KS_argument_strength")
     if payload.get("KI_present") == 1:
         required.update(KI_FIELDS)
-        if context.earlier_candidate:
-            required.add("KI_iterate_on_candidate_edit")
+        if context.earlier_ki_attempt:
+            required.add("KI_iterate")
         if context.earlier_ks:
             required.add("KI_prior_knowledge")
-    if payload.get("KI_present") == 1 and context.earlier_candidate:
+    if payload.get("KI_present") == 1 and context.earlier_ki_attempt:
         required.add("KI_explicit_feedback")
     feedback = payload.get("KI_explicit_feedback")
-    if (
-        payload.get("review_flag") == 1
-        or isinstance(payload.get("coder_confidence"), int)
-        and payload["coder_confidence"] <= low_threshold
-    ):
-        required.add("short_justification")
     if require_complete:
         for name in required:
             if name not in answered_fields or (payload.get(name) in (None, "", []) and name != "KI_explicit_feedback"):
@@ -144,7 +137,7 @@ def normalize_and_validate(
         + KI_FIELDS
         + (
             "KS_unelaborated_restaking",
-            "KI_iterate_on_candidate_edit",
+            "KI_iterate",
             "KI_prior_knowledge",
         )
     ):

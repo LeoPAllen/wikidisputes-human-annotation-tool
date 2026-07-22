@@ -8,6 +8,15 @@ def test_authoritative_codebook_and_controlled_values():
     assert "external_source_or_quote" in book.evidence_types
     assert "wording_or_framing" in book.dispute_objects
     assert "0,1,2" in book.fields["KS_argument_strength"].indicator.replace(" ", "")
+    assert {"KS_warrant_reasoning", "KI_solicit_feedback", "KI_iterate"} <= set(book.fields)
+    simplified_text = " ".join(
+        [
+            value
+            for field in book.fields.values()
+            for value in (field.label, field.definition, field.rule, field.example)
+        ]
+    )
+    assert "candidate" not in simplified_text.lower()
     assert len(book.file_hash) == 64
     assert schema_id(book.file_hash) == f"schema-{book.file_hash[:12]}"
 
