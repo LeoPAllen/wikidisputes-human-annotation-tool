@@ -137,7 +137,3 @@ def binary_control(label: str, key: str, value: int | None = None) -> int | None
     return st.radio(
         label, options, index=index, format_func=lambda item: "No" if item == 0 else "Yes", horizontal=True, key=key
     )
-
-
-def canonical_caption(name: str) -> None:
-    st.caption(f"Codebook field: `{name}`")

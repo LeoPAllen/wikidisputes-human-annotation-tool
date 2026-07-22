@@ -17,7 +17,6 @@ from wikidisputes_ui.models import BASE_BINARY, ContextState, applicable_fields,
 from wikidisputes_ui.storage import SchemaDriftError, Storage
 from wikidisputes_ui.ui_components import (
     binary_control,
-    canonical_caption,
     discussion_heading,
     focal_card,
     guide,
@@ -93,7 +92,7 @@ if st.session_state.get("confirm_switch"):
         st.rerun()
 
 qc_text = render_report(qc, config)
-export_data = build_export(storage, dataset, coder, qc_text)
+export_data = build_export(storage, dataset, coder, qc_text, config.schema_version, codebook.file_hash)
 st.sidebar.download_button(
     "Export my annotations",
     export_data,
@@ -110,13 +109,21 @@ st.sidebar.download_button(
 frame = dataset.annotatable_rows
 annotatable_ids = set(frame["utterance_id"].astype(str))
 dispute_ids = set(frame["dispute_id"].astype(str))
-submitted_rows = storage.rows("utterance_annotations", coder)
+submitted_rows = [
+    row
+    for row in storage.rows("utterance_annotations", coder)
+    if row["schema_version"] == config.schema_version and row["schema_hash"] == codebook.file_hash
+]
 submitted = {
     str(row["utterance_id"]): row
     for row in submitted_rows
     if row["status"] == "submitted" and str(row["utterance_id"]) in annotatable_ids
 }
-dispute_rows = storage.rows("dispute_annotations", coder)
+dispute_rows = [
+    row
+    for row in storage.rows("dispute_annotations", coder)
+    if row["schema_version"] == config.schema_version and row["schema_hash"] == codebook.file_hash
+]
 completed_disputes = {str(row["dispute_id"]) for row in dispute_rows if str(row["dispute_id"]) in dispute_ids}
 review_count = sum(bool(__import__("json").loads(row["payload_json"]).get("review_flag")) for row in submitted.values())
 
@@ -203,7 +210,7 @@ if st.session_state.page == "dispute":
     for name, item in codebook.dispute_objects.items():
         with st.expander(name):
             st.write(item["Definition"])
-            st.write(item["Dispute-level coding rule"])
+            st.write(item.get("Coding rule") or item.get("Dispute-level coding rule", ""))
     existing_rows = [item for item in dispute_rows if str(item["dispute_id"]) == did]
     existing = {} if not existing_rows else __import__("json").loads(existing_rows[0]["payload_json"])
     object_options = sorted(codebook.dispute_objects)
@@ -277,6 +284,8 @@ order = int(row["utterance_order"])
 prior = dataset.displayable_prior_context(did, order)
 earlier_turns = dataset.earlier_annotatable_turns(did, order)
 current = storage.current_utterance(coder, uid)
+if current and (current["schema_version"], current["schema_hash"]) != (config.schema_version, codebook.file_hash):
+    current = None
 prior_annotations = {
     str(item["utterance_id"]): __import__("json").loads(item["payload_json"])
     for item in submitted_rows
@@ -287,9 +296,7 @@ prior_annotations = {
 context = ContextState(
     tuple(earlier_turns["utterance_id"].astype(str)),
     any(v.get("KS_present") == 1 for v in prior_annotations.values()),
-    any(
-        v.get("KI_propose_action") == 1 or v.get("KI_announce_enacted_action") == 1 for v in prior_annotations.values()
-    ),
+    any(v.get("KI_present") == 1 for v in prior_annotations.values()),
 )
 defaults = {} if not current else current["payload"]
 if st.session_state.get("timer_uid") != uid:
@@ -302,19 +309,20 @@ st.progress(len(submitted) / max(1, len(frame)), text=f"{len(submitted)} of {len
 gateway_labels = {
     "KS_present": "Knowledge staking (KS)",
     "KI_present": "Knowledge integration (KI)",
-    "C_interpersonal_hostility": "Interpersonal hostility",
-    "C_formal_escalation_signal": "Formal escalation signal",
+    "C_off_topic_shift": "Off-topic shift",
+    "C_interpersonal_attack_or_disrespect": "Interpersonal attack or disrespect",
+    "C_formal_governance_action": "Formal governance action",
 }
 field_labels = {
-    "KS_problem_claim_specified": "Specifies a problem or claim",
+    "KS_claim_target_specified": "Makes at least one specific claim about a target issue",
     "KS_evidence_present": "Presents evidence",
-    "KS_acceptability_condition": "States an acceptability condition",
-    "KS_derailment": "Derails the knowledge exchange",
-    "KS_repetition_or_restaking": "Repeats or restakes earlier knowledge",
-    "KI_propose_action": "Proposes an action",
-    "KI_announce_enacted_action": "Announces an enacted action",
-    "KI_solicit": "Solicits integration",
-    "KI_iterate_on_candidate_action": "Iterates on an earlier candidate action",
+    "KS_reasoning": "Explains reasoning",
+    "KS_unelaborated_restaking": "Unelaborated restaking of earlier knowledge",
+    "KI_propose_edit": "Proposes an edit",
+    "KI_report_enacted_edit": "Reports an enacted edit",
+    "KI_solicit_candidate_feedback": "Solicits candidate feedback",
+    "KI_iterate_on_candidate_edit": "Iterates on an earlier candidate edit",
+    "KI_prior_knowledge": "Uses previously staked knowledge",
 }
 
 if st.session_state.get("stage_uid") != uid:
@@ -348,28 +356,21 @@ with reading.container(height=700, border=False, key="reading_pane"):
     prior_turns = prior[prior["utterance_role"] == "utterance"]
     if prior_turns.empty:
         st.caption("No earlier substantive turns. Future turns are never shown here.")
-    relevant_ids = {
-        key for key, value in prior_annotations.items() if value.get("KS_present") == 1 or value.get("KI_present") == 1
-    }
     direct_id = None if direct.empty or direct.iloc[0].get("utterance_role") != "utterance" else str(target)
-    older, recent = prior_turns.iloc[:-4], prior_turns.iloc[-4:]
 
     def render_prior(turn):
         turn_id = str(turn["utterance_id"])
+        prior_values = prior_annotations.get(turn_id, {})
         badges = []
         if turn_id == direct_id:
             badges.append("Reply target")
-        if turn_id in relevant_ids:
-            badges.append("Earlier KS/KI")
+        if prior_values.get("KS_present") == 1:
+            badges.append("Earlier KS")
+        if prior_values.get("KI_present") == 1:
+            badges.append("Earlier KI")
         prior_comment(turn, tuple(badges))
 
-    if not older.empty:
-        with st.expander(
-            f"Older history ({len(older)} turns)", expanded=direct_id in set(older.utterance_id.astype(str))
-        ):
-            for _, turn in older.iterrows():
-                render_prior(turn)
-    for _, turn in recent.iterrows():
+    for _, turn in prior_turns.iterrows():
         render_prior(turn)
     if not pd.isna(target) and direct.empty:
         st.info("The reply target is not available within the strict prior-context boundary; its text is not shown.")
@@ -404,11 +405,9 @@ with coding.container(height=700, border=False, key="coding_pane"):
         st.subheader("1. Identify what is present")
         for name in BASE_BINARY[:2]:
             set_binary(name, gateway_labels[name], "gateway")
-            canonical_caption(name)
         st.markdown("#### Controls")
         for name in BASE_BINARY[2:]:
             set_binary(name, gateway_labels[name], "gateway")
-            canonical_caption(name)
         clearing = [name for name in BASE_BINARY if defaults.get(name) == 1 and values.get(name) == 0]
         if clearing:
             st.warning(
@@ -435,8 +434,9 @@ with coding.container(height=700, border=False, key="coding_pane"):
             for name, label in (
                 ("KS_present", "KS"),
                 ("KI_present", "KI"),
-                ("C_interpersonal_hostility", "Hostility"),
-                ("C_formal_escalation_signal", "Formal escalation"),
+                ("C_off_topic_shift", "Off-topic"),
+                ("C_interpersonal_attack_or_disrespect", "Attack/disrespect"),
+                ("C_formal_governance_action", "Governance"),
             )
         )
         st.caption(summary)
@@ -453,17 +453,16 @@ with coding.container(height=700, border=False, key="coding_pane"):
         if values.get("KS_present") == 1:
             st.markdown("#### Knowledge staking details")
             for name in (
-                "KS_problem_claim_specified",
+                "KS_claim_target_specified",
                 "KS_evidence_present",
-                "KS_acceptability_condition",
-                "KS_derailment",
+                "KS_reasoning",
             ):
                 set_binary(name)
             if context.earlier_ks:
-                set_binary("KS_repetition_or_restaking")
-                if values.get("KS_repetition_or_restaking") == 1:
+                set_binary("KS_unelaborated_restaking")
+                if values.get("KS_unelaborated_restaking") == 1:
                     values["KS_prior_utterance_ids"] = st.multiselect(
-                        "Earlier KS utterances",
+                        "Earlier KS utterances (optional)",
                         list(labels),
                         default=values.get("KS_prior_utterance_ids") or [],
                         format_func=labels.get,
@@ -484,18 +483,25 @@ with coding.container(height=700, border=False, key="coding_pane"):
                 with st.expander("Evidence type definitions"):
                     for evidence_name, evidence_guide in codebook.evidence_types.items():
                         st.markdown(f"**{evidence_name}** — {evidence_guide['Definition']}")
-                values["KS_warrant_explicit"] = st.radio(
-                    "Warrant explicitness",
-                    range(1, 6),
-                    index=values.get("KS_warrant_explicit") - 1
-                    if values.get("KS_warrant_explicit") in range(1, 6)
-                    else None,
-                    horizontal=True,
-                    key=f"warrant_{uid}",
+            if values.get("KS_claim_target_specified") == 1 and (
+                values.get("KS_evidence_present") == 1 or values.get("KS_reasoning") == 1
+            ):
+                strength_options = {"0 — Unconvincing": 0, "1 — Partly convincing": 1, "2 — Convincing": 2}
+                current_strength = next(
+                    (label for label, score in strength_options.items() if score == values.get("KS_argument_strength")),
+                    None,
                 )
-                if values["KS_warrant_explicit"] is not None:
-                    answered.add("KS_warrant_explicit")
-                guide("KS_warrant_explicit", codebook.fields["KS_warrant_explicit"])
+                strength_choice = st.radio(
+                    "Argument strength",
+                    list(strength_options),
+                    index=list(strength_options).index(current_strength) if current_strength else None,
+                    horizontal=True,
+                    key=f"argument_strength_{uid}",
+                )
+                if strength_choice is not None:
+                    values["KS_argument_strength"] = strength_options[strength_choice]
+                    answered.add("KS_argument_strength")
+                guide("KS_argument_strength", codebook.fields["KS_argument_strength"])
             values["KS_evidence_span"] = st.text_area(
                 "KS evidence span", value=values.get("KS_evidence_span") or "", key=f"text_KS_evidence_span_{uid}"
             )
@@ -504,10 +510,10 @@ with coding.container(height=700, border=False, key="coding_pane"):
 
         if values.get("KI_present") == 1:
             st.markdown("#### Knowledge integration details")
-            for name in ("KI_propose_action", "KI_announce_enacted_action", "KI_solicit"):
+            for name in ("KI_propose_edit", "KI_report_enacted_edit", "KI_solicit_candidate_feedback"):
                 set_binary(name)
             if context.earlier_candidate:
-                set_binary("KI_iterate_on_candidate_action")
+                set_binary("KI_iterate_on_candidate_edit")
                 feedback_options = {
                     "No explicit feedback": None,
                     "Accept": "accept",
@@ -529,27 +535,15 @@ with coding.container(height=700, border=False, key="coding_pane"):
                     answered.add("KI_explicit_feedback")
                 guide("KI_explicit_feedback", codebook.fields["KI_explicit_feedback"])
             if context.earlier_ks:
-                values["KI_prior_stake_reflection"] = st.radio(
-                    "Reflection on prior stakes",
-                    range(1, 6),
-                    index=values.get("KI_prior_stake_reflection") - 1
-                    if values.get("KI_prior_stake_reflection") in range(1, 6)
-                    else None,
-                    horizontal=True,
-                    key=f"reflection_{uid}",
-                )
-                if values["KI_prior_stake_reflection"] is not None:
-                    answered.add("KI_prior_stake_reflection")
-                guide("KI_prior_stake_reflection", codebook.fields["KI_prior_stake_reflection"])
+                set_binary("KI_prior_knowledge")
             needs_upstream = (
-                values.get("KI_iterate_on_candidate_action") == 1
+                values.get("KI_iterate_on_candidate_edit") == 1
                 or values.get("KI_explicit_feedback") in {"accept", "reject", "mixed_or_conditional"}
-                or isinstance(values.get("KI_prior_stake_reflection"), int)
-                and values["KI_prior_stake_reflection"] > 1
+                or values.get("KI_prior_knowledge") == 1
             )
             if needs_upstream:
                 values["KI_upstream_utterance_ids"] = st.multiselect(
-                    "Upstream utterances",
+                    "Upstream utterances (optional)",
                     list(labels),
                     default=values.get("KI_upstream_utterance_ids") or [],
                     format_func=labels.get,
@@ -563,8 +557,8 @@ with coding.container(height=700, border=False, key="coding_pane"):
             if values["KI_evidence_span"].strip():
                 answered.add("KI_evidence_span")
 
-        if values.get("C_interpersonal_hostility") == 1 or values.get("C_formal_escalation_signal") == 1:
-            st.markdown("#### Control evidence")
+        if any(values.get(name) == 1 for name in BASE_BINARY[2:]):
+            st.markdown("#### Control evidence (optional)")
             values["control_evidence_span"] = st.text_area(
                 "Control evidence span",
                 value=values.get("control_evidence_span") or "",
@@ -592,21 +586,25 @@ with coding.container(height=700, border=False, key="coding_pane"):
             isinstance(values.get("coder_confidence"), int)
             and values["coder_confidence"] <= config.low_confidence_threshold
         )
-        if needs_justification:
-            st.caption("Required because confidence is low or this utterance is flagged for review.")
-        else:
-            st.caption(
-                "Short justification becomes required when confidence is "
-                f"{config.low_confidence_threshold} or lower, or when the utterance is flagged for review."
-            )
-        values["short_justification"] = st.text_area(
-            "Short justification",
-            value=values.get("short_justification") or "",
-            key=f"text_short_justification_{uid}",
-            disabled=not needs_justification,
+        justification_label = (
+            "Short justification — required" if needs_justification else "Short justification (optional)"
         )
-        if values["short_justification"].strip():
-            answered.add("short_justification")
+        with st.expander(justification_label, expanded=needs_justification):
+            if needs_justification:
+                st.caption("Required because confidence is low or this utterance is flagged for review.")
+            else:
+                st.caption(
+                    "Required when confidence is "
+                    f"{config.low_confidence_threshold} or lower, or when the utterance is flagged for review."
+                )
+            values["short_justification"] = st.text_area(
+                "Short justification",
+                value=values.get("short_justification") or "",
+                key=f"text_short_justification_{uid}",
+                placeholder="Briefly explain uncertainty or why review is needed.",
+            )
+            if values["short_justification"].strip():
+                answered.add("short_justification")
         with st.expander("Optional coder notes"):
             st.caption("Optional. Notes are recorded when you save a draft or submit the annotation.")
             values["coder_notes"] = st.text_area(

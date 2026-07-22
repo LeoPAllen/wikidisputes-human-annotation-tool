@@ -30,22 +30,22 @@ class Codebook:
 
 EXPECTED_LABELS = {
     "KS_present",
-    "KS_problem_claim_specified",
+    "KS_claim_target_specified",
     "KS_evidence_present",
     "KS_evidence_type",
-    "KS_warrant_explicit",
-    "KS_acceptability_condition",
-    "KS_repetition_or_restaking",
-    "KS_derailment",
+    "KS_reasoning",
+    "KS_argument_strength",
+    "KS_unelaborated_restaking",
     "KI_present",
-    "KI_propose_action",
-    "KI_announce_enacted_action",
-    "KI_solicit",
-    "KI_iterate_on_candidate_action",
+    "KI_propose_edit",
+    "KI_report_enacted_edit",
+    "KI_solicit_candidate_feedback",
+    "KI_iterate_on_candidate_edit",
     "KI_explicit_feedback",
-    "KI_prior_stake_reflection",
-    "C_interpersonal_hostility",
-    "C_formal_escalation_signal",
+    "KI_prior_knowledge",
+    "C_off_topic_shift",
+    "C_interpersonal_attack_or_disrespect",
+    "C_formal_governance_action",
     "C_primary_dispute_object",
 }
 
@@ -59,6 +59,9 @@ def load_codebook(path: str | Path, schema_sheet: str = "Core_Schema_SIMPLIFIED"
     schema = pd.read_excel(path, sheet_name=schema_sheet, dtype=object)
     evidence = pd.read_excel(path, sheet_name="Evidence_Types", dtype=object)
     objects = pd.read_excel(path, sheet_name="Primary_Dispute_Objects", dtype=object)
+    example_column = "Example (raw text + explanation)"
+    if example_column not in schema.columns:
+        example_column = "Real example"
     fields = {}
     for _, row in schema.iterrows():
         label = _clean(row["Label"])
@@ -68,7 +71,7 @@ def load_codebook(path: str | Path, schema_sheet: str = "Core_Schema_SIMPLIFIED"
             _clean(row["Indicator"]),
             _clean(row["Definition"]),
             _clean(row["Coding rule"]),
-            _clean(row["Real example"]),
+            _clean(row[example_column]),
         )
     evidence_types = {
         _clean(row["Evidence type"]): {str(k): _clean(v) for k, v in row.items()}

@@ -10,25 +10,25 @@ from typing import Any
 
 import pandas as pd
 
-from .ingest import Dataset
+from .ingest import ANNOTATION_COLUMNS, Dataset
 from .storage import Storage
 
 INTEGER_COLUMNS = {
     "KS_present",
-    "KS_problem_claim_specified",
+    "KS_claim_target_specified",
     "KS_evidence_present",
-    "KS_warrant_explicit",
-    "KS_acceptability_condition",
-    "KS_repetition_or_restaking",
-    "KS_derailment",
+    "KS_reasoning",
+    "KS_argument_strength",
+    "KS_unelaborated_restaking",
     "KI_present",
-    "KI_propose_action",
-    "KI_announce_enacted_action",
-    "KI_solicit",
-    "KI_iterate_on_candidate_action",
-    "KI_prior_stake_reflection",
-    "C_interpersonal_hostility",
-    "C_formal_escalation_signal",
+    "KI_propose_edit",
+    "KI_report_enacted_edit",
+    "KI_solicit_candidate_feedback",
+    "KI_iterate_on_candidate_edit",
+    "KI_prior_knowledge",
+    "C_off_topic_shift",
+    "C_interpersonal_attack_or_disrespect",
+    "C_formal_governance_action",
     "coder_confidence",
     "review_flag",
     "revision_number",
@@ -58,9 +58,24 @@ def _records(rows: list[dict[str, Any]]) -> pd.DataFrame:
     return pd.DataFrame(output)
 
 
-def build_export(storage: Storage, dataset: Dataset, coder: str, qc_report: str) -> bytes:
-    current = storage.rows("utterance_annotations", coder)
-    disputes = storage.rows("dispute_annotations", coder)
+def build_export(
+    storage: Storage,
+    dataset: Dataset,
+    coder: str,
+    qc_report: str,
+    schema_version: str,
+    schema_hash: str,
+) -> bytes:
+    current = [
+        row
+        for row in storage.rows("utterance_annotations", coder)
+        if row["schema_version"] == schema_version and row["schema_hash"] == schema_hash
+    ]
+    disputes = [
+        row
+        for row in storage.rows("dispute_annotations", coder)
+        if row["schema_version"] == schema_version and row["schema_hash"] == schema_hash
+    ]
     current_by_id = {str(row["utterance_id"]): row for row in current}
     dispute_by_id = {str(row["dispute_id"]): json.loads(row["payload_json"]) for row in disputes}
     output_rows = []
@@ -88,6 +103,8 @@ def build_export(storage: Storage, dataset: Dataset, coder: str, qc_report: str)
             row["C_primary_dispute_object"] = decision.get("C_primary_dispute_object")
         output_rows.append(row)
     sheets: dict[str, pd.DataFrame] = {"Gold_Annotations": pd.DataFrame(output_rows)}
+    for column in ANNOTATION_COLUMNS - set(sheets["Gold_Annotations"].columns):
+        sheets["Gold_Annotations"][column] = None
     for column in INTEGER_COLUMNS & set(sheets["Gold_Annotations"].columns):
         sheets["Gold_Annotations"][column] = pd.to_numeric(sheets["Gold_Annotations"][column], errors="coerce").astype(
             "Int64"
@@ -109,9 +126,17 @@ def safe_export_name(coder: str) -> str:
     return f"wikidisputes_{coder}_{stamp}.xlsx"
 
 
-def write_export(storage: Storage, dataset: Dataset, coder: str, qc_report: str, directory: str | Path) -> Path:
+def write_export(
+    storage: Storage,
+    dataset: Dataset,
+    coder: str,
+    qc_report: str,
+    directory: str | Path,
+    schema_version: str,
+    schema_hash: str,
+) -> Path:
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / safe_export_name(coder)
-    path.write_bytes(build_export(storage, dataset, coder, qc_report))
+    path.write_bytes(build_export(storage, dataset, coder, qc_report, schema_version, schema_hash))
     return path

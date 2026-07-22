@@ -10,7 +10,7 @@ import pandas as pd
 
 from .codebook import EXPECTED_LABELS, load_codebook
 from .config import ProjectConfig, load_config
-from .ingest import ANNOTATION_COLUMNS, REQUIRED_COLUMNS
+from .ingest import ANNOTATION_COLUMNS, LEGACY_SOURCE_ANNOTATION_COLUMNS, REQUIRED_COLUMNS
 
 
 @dataclass
@@ -45,7 +45,11 @@ def validate_inputs(config: ProjectConfig) -> QCResult:
         result.errors.append(f"Missing required annotation sheet {sheet!r}; found {book.sheet_names!r}.")
     else:
         frame = pd.read_excel(config.gold_path, sheet_name=sheet, dtype=object)
-        missing = sorted((REQUIRED_COLUMNS | ANNOTATION_COLUMNS) - set(frame.columns))
+        missing = sorted(REQUIRED_COLUMNS - set(frame.columns))
+        annotation_variants = (ANNOTATION_COLUMNS, LEGACY_SOURCE_ANNOTATION_COLUMNS)
+        if not any(columns <= set(frame.columns) for columns in annotation_variants):
+            closest = min(annotation_variants, key=lambda columns: len(columns - set(frame.columns)))
+            missing.extend(sorted(closest - set(frame.columns)))
         if not any(col in frame.columns for col in ("article_title", "source_page_title", "dispute_label")):
             missing.append("article_title (or source_page_title/dispute_label alias)")
         if missing:
@@ -97,7 +101,8 @@ def validate_inputs(config: ProjectConfig) -> QCResult:
             elif context.index[0] != group.index[0]:
                 result.errors.append(f"{sheet} dispute {did}: context row must be first.")
             if not context.empty:
-                nonblank = [column for column in ANNOTATION_COLUMNS if context[column].notna().any()]
+                annotation_columns = (ANNOTATION_COLUMNS | LEGACY_SOURCE_ANNOTATION_COLUMNS) & set(context.columns)
+                nonblank = [column for column in annotation_columns if context[column].notna().any()]
                 if nonblank:
                     result.errors.append(
                         f"{sheet} dispute {did}: context annotation fields are not blank: {', '.join(sorted(nonblank))}."
@@ -156,13 +161,15 @@ def validate_inputs(config: ProjectConfig) -> QCResult:
         missing_labels = EXPECTED_LABELS - set(codebook.fields)
         if missing_labels:
             result.errors.append(f"Codebook missing UI labels: {', '.join(sorted(missing_labels))}.")
+        unexpected_labels = set(codebook.fields) - EXPECTED_LABELS
+        if unexpected_labels:
+            result.errors.append(f"Codebook has unsupported UI labels: {', '.join(sorted(unexpected_labels))}.")
         if not codebook.evidence_types:
             result.errors.append("Codebook Evidence_Types has no allowed values.")
         if not codebook.dispute_objects:
             result.errors.append("Codebook Primary_Dispute_Objects has no allowed values.")
-        for ordinal in ("KS_warrant_explicit", "KI_prior_stake_reflection"):
-            if "1,2,3,4,5" not in codebook.fields[ordinal].indicator.replace(" ", ""):
-                result.errors.append(f"{ordinal}: authoritative indicator does not offer ordinal 1–5.")
+        if "0,1,2" not in codebook.fields["KS_argument_strength"].indicator.replace(" ", ""):
+            result.errors.append("KS_argument_strength: authoritative indicator does not offer ordinal 0–2.")
     except Exception as exc:
         result.errors.append(f"Cannot load authoritative codebook: {exc}")
     result.checks.append(f"Source workbook sheets found: {', '.join(book.sheet_names)}")

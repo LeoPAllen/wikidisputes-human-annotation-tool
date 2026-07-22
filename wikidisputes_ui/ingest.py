@@ -24,22 +24,22 @@ ARTICLE_COLUMNS = ("article_title", "source_page_title", "dispute_label")
 ANNOTATION_COLUMNS = {
     "coder_id",
     "KS_present",
-    "KS_problem_claim_specified",
+    "KS_claim_target_specified",
     "KS_evidence_present",
     "KS_evidence_type",
-    "KS_warrant_explicit",
-    "KS_acceptability_condition",
-    "KS_repetition_or_restaking",
-    "KS_derailment",
+    "KS_reasoning",
+    "KS_argument_strength",
+    "KS_unelaborated_restaking",
     "KI_present",
-    "KI_propose_action",
-    "KI_announce_enacted_action",
-    "KI_solicit",
-    "KI_iterate_on_candidate_action",
+    "KI_propose_edit",
+    "KI_report_enacted_edit",
+    "KI_solicit_candidate_feedback",
+    "KI_iterate_on_candidate_edit",
     "KI_explicit_feedback",
-    "KI_prior_stake_reflection",
-    "C_interpersonal_hostility",
-    "C_formal_escalation_signal",
+    "KI_prior_knowledge",
+    "C_off_topic_shift",
+    "C_interpersonal_attack_or_disrespect",
+    "C_formal_governance_action",
     "C_primary_dispute_object",
     "KS_evidence_span",
     "KS_prior_utterance_ids",
@@ -51,6 +51,37 @@ ANNOTATION_COLUMNS = {
     "review_flag",
     "coder_notes",
 }
+
+# The immutable source workbook may retain blank columns from earlier schemas.
+LEGACY_ANNOTATION_COLUMNS = {
+    "KS_problem_claim_specified",
+    "KS_warrant_explicit",
+    "KS_acceptability_condition",
+    "KS_repetition_or_restaking",
+    "KS_derailment",
+    "KI_propose_action",
+    "KI_announce_enacted_action",
+    "KI_solicit",
+    "KI_iterate_on_candidate_action",
+    "KI_prior_stake_reflection",
+    "C_interpersonal_hostility",
+    "C_formal_escalation_signal",
+}
+NEW_SCHEMA_COLUMNS = {
+    "KS_claim_target_specified",
+    "KS_reasoning",
+    "KS_argument_strength",
+    "KS_unelaborated_restaking",
+    "KI_propose_edit",
+    "KI_report_enacted_edit",
+    "KI_solicit_candidate_feedback",
+    "KI_iterate_on_candidate_edit",
+    "KI_prior_knowledge",
+    "C_off_topic_shift",
+    "C_interpersonal_attack_or_disrespect",
+    "C_formal_governance_action",
+}
+LEGACY_SOURCE_ANNOTATION_COLUMNS = (ANNOTATION_COLUMNS - NEW_SCHEMA_COLUMNS) | LEGACY_ANNOTATION_COLUMNS
 
 
 @dataclass

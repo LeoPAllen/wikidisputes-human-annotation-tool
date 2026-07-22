@@ -4,11 +4,10 @@ from wikidisputes_ui.config import load_config
 
 def test_authoritative_codebook_and_controlled_values():
     book = load_codebook("data/source/codebook.xlsx")
-    assert EXPECTED_LABELS <= set(book.fields)
+    assert EXPECTED_LABELS == set(book.fields)
     assert "external_source_or_quote" in book.evidence_types
-    assert "wording_framing" in book.dispute_objects
-    for name in ("KS_warrant_explicit", "KI_prior_stake_reflection"):
-        assert "1,2,3,4,5" in book.fields[name].indicator.replace(" ", "")
+    assert "wording_or_framing" in book.dispute_objects
+    assert "0,1,2" in book.fields["KS_argument_strength"].indicator.replace(" ", "")
     assert len(book.file_hash) == 64
 
 

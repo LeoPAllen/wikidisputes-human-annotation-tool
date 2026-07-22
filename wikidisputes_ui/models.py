@@ -5,20 +5,26 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-BASE_BINARY = ("KS_present", "KI_present", "C_interpersonal_hostility", "C_formal_escalation_signal")
-KS_FIELDS = ("KS_problem_claim_specified", "KS_evidence_present", "KS_acceptability_condition", "KS_derailment")
-KI_FIELDS = ("KI_propose_action", "KI_announce_enacted_action", "KI_solicit")
+BASE_BINARY = (
+    "KS_present",
+    "KI_present",
+    "C_off_topic_shift",
+    "C_interpersonal_attack_or_disrespect",
+    "C_formal_governance_action",
+)
+KS_FIELDS = ("KS_claim_target_specified", "KS_evidence_present", "KS_reasoning")
+KI_FIELDS = ("KI_propose_edit", "KI_report_enacted_edit", "KI_solicit_candidate_feedback")
 ALL_LABELS = set(
     BASE_BINARY
     + KS_FIELDS
     + KI_FIELDS
     + (
         "KS_evidence_type",
-        "KS_warrant_explicit",
-        "KS_repetition_or_restaking",
-        "KI_iterate_on_candidate_action",
+        "KS_argument_strength",
+        "KS_unelaborated_restaking",
+        "KI_iterate_on_candidate_edit",
         "KI_explicit_feedback",
-        "KI_prior_stake_reflection",
+        "KI_prior_knowledge",
     )
 )
 AUDIT_FIELDS = {
@@ -53,38 +59,39 @@ class ValidationResult:
 
 
 def applicable_fields(values: dict[str, Any], context: ContextState, low_threshold: int = 2) -> set[str]:
-    applicable = set(BASE_BINARY) | {"coder_confidence", "review_flag", "coder_notes"}
+    applicable = set(BASE_BINARY) | {
+        "coder_confidence",
+        "short_justification",
+        "review_flag",
+        "coder_notes",
+    }
     if values.get("KS_present") == 1:
         applicable.update(KS_FIELDS + ("KS_evidence_span",))
         if context.earlier_ks:
-            applicable.add("KS_repetition_or_restaking")
-            if values.get("KS_repetition_or_restaking") == 1:
+            applicable.add("KS_unelaborated_restaking")
+            if values.get("KS_unelaborated_restaking") == 1:
                 applicable.add("KS_prior_utterance_ids")
         if values.get("KS_evidence_present") == 1:
-            applicable.update(("KS_evidence_type", "KS_warrant_explicit"))
+            applicable.add("KS_evidence_type")
+        if values.get("KS_claim_target_specified") == 1 and (
+            values.get("KS_evidence_present") == 1 or values.get("KS_reasoning") == 1
+        ):
+            applicable.add("KS_argument_strength")
     if values.get("KI_present") == 1:
         applicable.update(KI_FIELDS + ("KI_evidence_span",))
         if context.earlier_candidate:
-            applicable.update(("KI_iterate_on_candidate_action", "KI_explicit_feedback"))
+            applicable.update(("KI_iterate_on_candidate_edit", "KI_explicit_feedback"))
         if context.earlier_ks:
-            applicable.add("KI_prior_stake_reflection")
+            applicable.add("KI_prior_knowledge")
         feedback = values.get("KI_explicit_feedback")
-        reflection = values.get("KI_prior_stake_reflection")
         if (
-            values.get("KI_iterate_on_candidate_action") == 1
+            values.get("KI_iterate_on_candidate_edit") == 1
             or feedback in {"accept", "reject", "mixed_or_conditional"}
-            or isinstance(reflection, int)
-            and reflection > 1
+            or values.get("KI_prior_knowledge") == 1
         ):
             applicable.add("KI_upstream_utterance_ids")
-    if values.get("C_interpersonal_hostility") == 1 or values.get("C_formal_escalation_signal") == 1:
+    if any(values.get(name) == 1 for name in BASE_BINARY[2:]):
         applicable.add("control_evidence_span")
-    if (
-        values.get("review_flag") == 1
-        or isinstance(values.get("coder_confidence"), int)
-        and values["coder_confidence"] <= low_threshold
-    ):
-        applicable.add("short_justification")
     return applicable
 
 
@@ -105,29 +112,22 @@ def normalize_and_validate(
     if payload.get("KS_present") == 1:
         required.update(KS_FIELDS)
         if context.earlier_ks:
-            required.add("KS_repetition_or_restaking")
+            required.add("KS_unelaborated_restaking")
         if payload.get("KS_evidence_present") == 1:
-            required.update(("KS_evidence_type", "KS_warrant_explicit"))
+            required.add("KS_evidence_type")
+        if payload.get("KS_claim_target_specified") == 1 and (
+            payload.get("KS_evidence_present") == 1 or payload.get("KS_reasoning") == 1
+        ):
+            required.add("KS_argument_strength")
     if payload.get("KI_present") == 1:
         required.update(KI_FIELDS)
         if context.earlier_candidate:
-            required.add("KI_iterate_on_candidate_action")
+            required.add("KI_iterate_on_candidate_edit")
         if context.earlier_ks:
-            required.add("KI_prior_stake_reflection")
+            required.add("KI_prior_knowledge")
     if payload.get("KI_present") == 1 and context.earlier_candidate:
         required.add("KI_explicit_feedback")
-    if payload.get("C_interpersonal_hostility") == 1 or payload.get("C_formal_escalation_signal") == 1:
-        required.add("control_evidence_span")
-    if payload.get("KS_repetition_or_restaking") == 1:
-        required.add("KS_prior_utterance_ids")
     feedback = payload.get("KI_explicit_feedback")
-    reflection = payload.get("KI_prior_stake_reflection")
-    if (
-        payload.get("KI_iterate_on_candidate_action") == 1
-        or feedback in {"accept", "reject", "mixed_or_conditional"}
-        or (isinstance(reflection, int) and reflection > 1)
-    ):
-        required.add("KI_upstream_utterance_ids")
     if (
         payload.get("review_flag") == 1
         or isinstance(payload.get("coder_confidence"), int)
@@ -138,10 +138,21 @@ def normalize_and_validate(
         for name in required:
             if name not in answered_fields or (payload.get(name) in (None, "", []) and name != "KI_explicit_feedback"):
                 errors[name] = "An explicit response is required."
-    for name in BASE_BINARY + KS_FIELDS + KI_FIELDS + ("KS_repetition_or_restaking", "KI_iterate_on_candidate_action"):
+    for name in (
+        BASE_BINARY
+        + KS_FIELDS
+        + KI_FIELDS
+        + (
+            "KS_unelaborated_restaking",
+            "KI_iterate_on_candidate_edit",
+            "KI_prior_knowledge",
+        )
+    ):
         if payload.get(name) is not None and payload[name] not in (0, 1):
             errors[name] = "Choose No or Yes."
-    for name in ("KS_warrant_explicit", "KI_prior_stake_reflection", "coder_confidence"):
+    if payload.get("KS_argument_strength") is not None and payload["KS_argument_strength"] not in range(3):
+        errors["KS_argument_strength"] = "Choose 0, 1, or 2."
+    for name in ("coder_confidence",):
         if payload.get(name) is not None and payload[name] not in range(1, 6):
             errors[name] = "Choose an integer from 1 through 5."
     selected = payload.get("KS_evidence_type")
