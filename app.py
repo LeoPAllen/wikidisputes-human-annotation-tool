@@ -560,17 +560,27 @@ with reading.container(height=700, border=False, key="reading_pane"):
 
 with coding.container(height=700, border=False, key="coding_pane"):
     values = dict(defaults)
+    presence_edits_key = f"presence_edits_{uid}"
+    values.update(st.session_state.get(presence_edits_key, {}))
     answered = set() if not current else set(current["answered_fields"])
     tasks = TaskCounter()
 
     def set_binary(name: str, label: str | None = None, key_prefix: str = "field") -> None:
         visible_label = label or field_labels.get(name, name)
+        widget_key = f"{key_prefix}_{name}_{uid}"
+
+        def remember_presence_change() -> None:
+            edits = dict(st.session_state.get(presence_edits_key, {}))
+            edits[name] = st.session_state[widget_key]
+            st.session_state[presence_edits_key] = edits
+
         value = binary_task(
             tasks,
             visible_label,
             codebook.fields[name],
-            f"{key_prefix}_{name}_{uid}",
+            widget_key,
             values.get(name),
+            on_change=remember_presence_change if key_prefix == "gateway" else None,
         )
         values[name] = value
         if value is not None:
@@ -632,6 +642,7 @@ with coding.container(height=700, border=False, key="coding_pane"):
                     values, answered, context, set(codebook.evidence_types), config.low_confidence_threshold, False
                 )
                 save_result(result, False)
+                st.session_state.pop(presence_edits_key, None)
                 st.session_state.annotation_stage = 2
                 st.rerun()
     else:

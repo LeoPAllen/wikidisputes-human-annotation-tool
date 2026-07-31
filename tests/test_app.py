@@ -140,6 +140,21 @@ def test_all_negative_stage_two_and_draft_reload(monkeypatch, synthetic_project)
     assert {"Coder confidence", "Flag for review"} <= {radio.label for radio in reloaded.radio}
 
 
+def test_presence_changes_from_details_are_saved_before_returning(monkeypatch, synthetic_project):
+    app = enter_first_utterance(configured_app(monkeypatch, synthetic_project))
+    app = set_gateways(app)
+    app = next(button for button in app.button if button.label == "Continue to details").click().run()
+    app = enter_first_utterance(configured_app(monkeypatch, synthetic_project))
+
+    app = next(button for button in app.button if button.label == "Change presence answers").click().run()
+    next(radio for radio in app.radio if radio.label == "Knowledge staking (KS)").set_value(1)
+    app = next(button for button in app.button if button.label == "Continue to details").click().run()
+
+    assert "Shares supporting evidence" in {radio.label for radio in app.radio}
+    draft = Storage(synthetic_project.database_path).current_utterance("coder_01", "u1")
+    assert draft["payload"]["KS_present"] == 1
+
+
 def test_low_confidence_allows_optional_notes_and_submission(monkeypatch, synthetic_project):
     app = enter_first_utterance(configured_app(monkeypatch, synthetic_project))
     app = set_gateways(app)

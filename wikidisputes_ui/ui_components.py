@@ -5,7 +5,7 @@ from __future__ import annotations
 import html
 import re
 from dataclasses import dataclass
-from typing import Mapping
+from typing import Callable, Mapping
 
 import pandas as pd
 import streamlit as st
@@ -213,10 +213,11 @@ def binary_task(
     item: FieldGuide,
     key: str,
     value: int | None = None,
+    on_change: Callable[[], None] | None = None,
 ) -> int | None:
     """Render heading, guidance, then an accessible binary response control."""
     task_intro(counter, label, item, binary=True)
-    return binary_control(label, key, value, label_visibility="collapsed")
+    return binary_control(label, key, value, label_visibility="collapsed", on_change=on_change)
 
 
 def binary_control(
@@ -225,6 +226,7 @@ def binary_control(
     value: int | None = None,
     *,
     label_visibility: str = "visible",
+    on_change: Callable[[], None] | None = None,
 ) -> int | None:
     options = [0, 1]
     index = options.index(value) if value in options else None
@@ -236,4 +238,5 @@ def binary_control(
         horizontal=True,
         key=key,
         label_visibility=label_visibility,
+        on_change=on_change,
     )
