@@ -72,13 +72,14 @@ def submit_first_utterance_all_negative(app):
     return next(button for button in app.button if button.label == "Submit and next").click().run()
 
 
-def save_submitted(storage, book, uid, did):
+def save_submitted(storage, book, uid, did, payload=None, answered_fields=None):
+    payload = payload or {"KS_present": 0}
     storage.save_utterance(
         coder="coder_01",
         utterance_id=uid,
         dispute_id=did,
-        payload={"KS_present": 0},
-        answered_fields={"KS_present"},
+        payload=payload,
+        answered_fields=answered_fields or set(payload),
         submit=True,
         schema_version=schema_id(book.file_hash),
         schema_hash=book.file_hash,
@@ -199,13 +200,13 @@ def test_coder_notes_explain_when_they_are_recorded(monkeypatch, synthetic_proje
         ),
         (
             {"Knowledge integration (KI)": 1},
-            {"Proposes an edit", "Solicits feedback", "KI evidence span"},
-            {"Shares supporting evidence", "Control evidence span"},
+            {"Proposes an edit", "Solicits feedback"},
+            {"Shares supporting evidence", "KI evidence span", "Control evidence span"},
         ),
         (
             {"Interpersonal attack or disrespect": 1},
-            {"Control evidence span"},
-            {"Shares supporting evidence", "Proposes an edit", "KI evidence span"},
+            set(),
+            {"Shares supporting evidence", "Proposes an edit", "KI evidence span", "Control evidence span"},
         ),
         (
             {"Knowledge staking (KS)": 1, "Knowledge integration (KI)": 1, "Formal governance action": 1},
@@ -213,10 +214,8 @@ def test_coder_notes_explain_when_they_are_recorded(monkeypatch, synthetic_proje
                 "Shares supporting evidence",
                 "Proposes an edit",
                 "Solicits feedback",
-                "KI evidence span",
-                "Control evidence span",
             },
-            set(),
+            {"KI evidence span", "Control evidence span"},
         ),
     ],
 )
@@ -236,6 +235,51 @@ def test_stage_two_renders_only_applicable_families(monkeypatch, synthetic_proje
         + [widget.label for widget in [*app.radio, *app.text_area, *app.multiselect, *app.selectbox]]
     )
     assert "candidate" not in visible_text.lower()
+
+
+def test_ki_upstream_links_are_split_by_relationship(monkeypatch, synthetic_project):
+    storage = Storage(synthetic_project.database_path)
+    storage.set_active_coder("coder_01")
+    book = load_codebook(synthetic_project.codebook_path)
+    save_submitted(
+        storage,
+        book,
+        "u1",
+        "D1",
+        payload={"KS_present": 1, "KI_present": 1},
+    )
+    app = enter_first_utterance(configured_app(monkeypatch, synthetic_project))
+    app = set_gateways(app, **{"Knowledge integration (KI)": 1})
+    app = next(button for button in app.button if button.label == "Continue to details").click().run()
+    app = enter_first_utterance(configured_app(monkeypatch, synthetic_project))
+
+    next(radio for radio in app.radio if radio.label == "Develops an earlier proposed or enacted edit").set_value(1)
+    next(radio for radio in app.radio if radio.label == "Uses previously staked knowledge").set_value(1)
+    next(
+        radio for radio in app.radio if radio.label == "Explicit feedback on an earlier proposed or enacted edit"
+    ).set_value("Accept")
+    app = app.run()
+
+    prompts = {
+        "Which earlier KS utterance(s) supplied knowledge to this KI utterance? (optional)": (
+            "KI_prior_knowledge_utterance_ids"
+        ),
+        "Which earlier KI utterance(s) does this KI utterance iterate on? (optional)": "KI_iteration_utterance_ids",
+        "Which earlier KI utterance(s) receive explicit feedback from this KI utterance? (optional)": (
+            "KI_feedback_utterance_ids"
+        ),
+    }
+    for prompt, field_name in prompts.items():
+        selector = next(select for select in app.multiselect if select.label == prompt)
+        assert selector.options == ["#2 — A — First proposal"]
+        app.session_state[f"ids_{field_name}_u2"] = ["u1"]
+    app = app.run()
+    next(button for button in app.button if button.label == "Save draft").click().run()
+
+    draft = storage.current_utterance("coder_01", "u2")
+    for field_name in prompts.values():
+        assert draft["payload"][field_name] == ["u1"]
+    assert draft["payload"]["KI_upstream_utterance_ids"] is None
 
 
 def test_evidence_guidance_precedes_distinct_multiselect_task(monkeypatch, synthetic_project):
@@ -274,6 +318,14 @@ def test_previous_navigation_saves_edits_as_draft_without_submission(monkeypatch
     assert [event["event_type"] for event in events] == ["draft"]
 
 
+def test_earlier_conversation_turns_show_utterance_number_badges(monkeypatch, synthetic_project):
+    app = enter_first_utterance(configured_app(monkeypatch, synthetic_project))
+    app = submit_first_utterance_all_negative(app)
+    app = enter_first_utterance(configured_app(monkeypatch, synthetic_project))
+    rendered = "\n".join(str(element.value) for element in app.markdown)
+    assert '<div class="prior-comment"><span class="badge">#2</span>' in rendered
+
+
 def test_navigation_without_answers_creates_no_spurious_draft(monkeypatch, synthetic_project):
     app = enter_first_utterance(configured_app(monkeypatch, synthetic_project))
     app = submit_first_utterance_all_negative(app)
@@ -309,6 +361,20 @@ def test_dispute_navigation_opens_earliest_unsubmitted_even_when_later_is_submit
     rendered = "\n".join(str(element.value) for element in app.markdown)
     assert "D2 first" in rendered
     assert '<div class="source-text">D2 later</div>' not in rendered
+
+    selector = next(select for select in app.selectbox if select.label == "Move to another dispute")
+    selector.set_value(next(option for option in selector.options if "D2" in option))
+    app = app.run()
+    utterance_selector = next(
+        select for select in app.selectbox if select.label == "Move to a specific utterance in that dispute"
+    )
+    later_label = next(option for option in utterance_selector.options if "D2 later" in option)
+    utterance_selector.set_value(later_label)
+    app = app.run()
+    app = next(button for button in app.button if button.label == "Open selected utterance →").click().run()
+    assert app.session_state["unit_id"] == "d2u2"
+    rendered = "\n".join(str(element.value) for element in app.markdown)
+    assert "D2 later" in rendered
 
 
 def test_completed_dispute_can_reopen_utterance_review(monkeypatch, synthetic_project):

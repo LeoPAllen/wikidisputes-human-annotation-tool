@@ -36,9 +36,9 @@ INTEGER_COLUMNS = {
 
 AUDIT_EXPORT_COLUMNS = (
     "KS_prior_utterance_ids",
-    "KI_evidence_span",
-    "KI_upstream_utterance_ids",
-    "control_evidence_span",
+    "KI_prior_knowledge_utterance_ids",
+    "KI_iteration_utterance_ids",
+    "KI_feedback_utterance_ids",
     "coder_confidence",
     "review_flag",
     "coder_notes",

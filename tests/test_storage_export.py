@@ -14,7 +14,14 @@ def save(storage, coder="coder_1", uid="u1", payload=None):
         coder=coder,
         utterance_id=uid,
         dispute_id="D1",
-        payload=payload or {"KS_present": 0, "KS_evidence_type": None, "KI_upstream_utterance_ids": ["prior", "a"]},
+        payload=payload
+        or {
+            "KS_present": 0,
+            "KS_evidence_type": None,
+            "KI_prior_knowledge_utterance_ids": ["ks2", "ks1"],
+            "KI_iteration_utterance_ids": ["ki2", "ki1"],
+            "KI_feedback_utterance_ids": ["ki3", "ki1"],
+        },
         answered_fields={"KS_present"},
         submit=True,
         schema_version="0.9.7",
@@ -92,7 +99,10 @@ def test_dispute_completion_export_propagation_and_isolation(tmp_path, synthetic
     frame = pd.read_excel(BytesIO(data), sheet_name="Gold_Annotations")
     row = frame[frame.utterance_id == "u1"].iloc[0]
     assert row.C_primary_dispute_object == "wording_or_framing"
-    assert row.KI_upstream_utterance_ids == "a;prior"
+    assert row.KI_prior_knowledge_utterance_ids == "ks1;ks2"
+    assert row.KI_iteration_utterance_ids == "ki1;ki2"
+    assert row.KI_feedback_utterance_ids == "ki1;ki3"
+    assert "KI_upstream_utterance_ids" not in frame.columns
     assert pd.isna(row.KS_evidence_type)
     assert set(frame.utterance_id) == {"u1"}
     assert set(book.fields) <= set(frame.columns)
@@ -120,6 +130,8 @@ def test_export_is_locked_to_active_schema_and_excludes_history(tmp_path, synthe
         "KI_prior_knowledge",
         "C_off_topic_shift",
     } <= set(annotations.columns)
+    assert "KI_evidence_span" not in annotations.columns
+    assert "control_evidence_span" not in annotations.columns
     assert not any("candidate" in str(column).lower() for column in annotations.columns)
 
 

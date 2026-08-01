@@ -30,15 +30,21 @@ ALL_LABELS = set(
 AUDIT_FIELDS = {
     "KS_evidence_span",
     "KS_prior_utterance_ids",
-    "KI_evidence_span",
-    "KI_upstream_utterance_ids",
-    "control_evidence_span",
+    "KI_prior_knowledge_utterance_ids",
+    "KI_iteration_utterance_ids",
+    "KI_feedback_utterance_ids",
     "coder_confidence",
     "short_justification",
     "review_flag",
     "coder_notes",
 }
-ALL_FIELDS = ALL_LABELS | AUDIT_FIELDS
+REMOVED_FIELDS = {
+    "KS_evidence_span",
+    "KI_evidence_span",
+    "KI_upstream_utterance_ids",
+    "control_evidence_span",
+}
+ALL_FIELDS = ALL_LABELS | AUDIT_FIELDS | REMOVED_FIELDS
 
 
 @dataclass(frozen=True)
@@ -46,6 +52,8 @@ class ContextState:
     earlier_ids: tuple[str, ...] = ()
     earlier_ks: bool = False
     earlier_ki_attempt: bool = False
+    earlier_ks_ids: tuple[str, ...] = ()
+    earlier_ki_ids: tuple[str, ...] = ()
 
 
 @dataclass
@@ -77,20 +85,17 @@ def applicable_fields(values: dict[str, Any], context: ContextState, low_thresho
         ):
             applicable.add("KS_argument_strength")
     if values.get("KI_present") == 1:
-        applicable.update(KI_FIELDS + ("KI_evidence_span",))
+        applicable.update(KI_FIELDS)
         if context.earlier_ki_attempt:
             applicable.update(("KI_iterate", "KI_explicit_feedback"))
         if context.earlier_ks:
             applicable.add("KI_prior_knowledge")
-        feedback = values.get("KI_explicit_feedback")
-        if (
-            values.get("KI_iterate") == 1
-            or feedback in {"accept", "reject", "mixed_or_conditional"}
-            or values.get("KI_prior_knowledge") == 1
-        ):
-            applicable.add("KI_upstream_utterance_ids")
-    if any(values.get(name) == 1 for name in BASE_BINARY[2:]):
-        applicable.add("control_evidence_span")
+        if values.get("KI_prior_knowledge") == 1:
+            applicable.add("KI_prior_knowledge_utterance_ids")
+        if values.get("KI_iterate") == 1:
+            applicable.add("KI_iteration_utterance_ids")
+        if values.get("KI_explicit_feedback") in {"accept", "reject", "mixed_or_conditional"}:
+            applicable.add("KI_feedback_utterance_ids")
     return applicable
 
 
@@ -154,12 +159,18 @@ def normalize_and_validate(
         if unknown:
             errors["KS_evidence_type"] = f"Unknown evidence type(s): {', '.join(sorted(unknown))}"
         payload["KS_evidence_type"] = sorted(set(selected))
-    for field_name in ("KS_prior_utterance_ids", "KI_upstream_utterance_ids"):
+    link_targets = {
+        "KS_prior_utterance_ids": set(context.earlier_ks_ids),
+        "KI_prior_knowledge_utterance_ids": set(context.earlier_ks_ids),
+        "KI_iteration_utterance_ids": set(context.earlier_ki_ids),
+        "KI_feedback_utterance_ids": set(context.earlier_ki_ids),
+    }
+    for field_name, allowed_ids in link_targets.items():
         ids = payload.get(field_name)
         if ids:
-            invalid = set(ids) - set(context.earlier_ids)
+            invalid = set(ids) - allowed_ids
             if invalid:
-                errors[field_name] = f"Only earlier utterance IDs are allowed: {', '.join(sorted(invalid))}"
+                errors[field_name] = f"Only qualifying earlier utterance IDs are allowed: {', '.join(sorted(invalid))}"
             payload[field_name] = sorted(set(ids))
     if feedback not in (None, "accept", "reject", "mixed_or_conditional"):
         errors["KI_explicit_feedback"] = "Choose a canonical feedback value."

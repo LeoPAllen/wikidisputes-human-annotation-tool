@@ -447,9 +447,19 @@ prior_annotations = {
     and str(item["utterance_id"]) in set(earlier_turns["utterance_id"].astype(str))
 }
 context = ContextState(
-    tuple(earlier_turns["utterance_id"].astype(str)),
-    any(v.get("KS_present") == 1 for v in prior_annotations.values()),
-    any(v.get("KI_present") == 1 for v in prior_annotations.values()),
+    earlier_ids=tuple(earlier_turns["utterance_id"].astype(str)),
+    earlier_ks=any(v.get("KS_present") == 1 for v in prior_annotations.values()),
+    earlier_ki_attempt=any(v.get("KI_present") == 1 for v in prior_annotations.values()),
+    earlier_ks_ids=tuple(
+        turn_id
+        for turn_id in earlier_turns["utterance_id"].astype(str)
+        if prior_annotations.get(turn_id, {}).get("KS_present") == 1
+    ),
+    earlier_ki_ids=tuple(
+        turn_id
+        for turn_id in earlier_turns["utterance_id"].astype(str)
+        if prior_annotations.get(turn_id, {}).get("KI_present") == 1
+    ),
 )
 defaults = {} if not current else current["payload"]
 if st.session_state.get("timer_uid") != uid:
@@ -479,9 +489,31 @@ with st.container(border=True):
         placeholder="Choose an article and dispute",
         key=f"utterance_dispute_selector_{uid}",
     )
-    open_col, decision_col = st.columns(2)
+    selected_dispute_id = navigation_choices.get(selected_dispute_label)
+    utterance_choices = {}
+    if selected_dispute_id is not None:
+        for _, candidate in dataset.annotatable_in_dispute(selected_dispute_id).iterrows():
+            candidate_id = str(candidate["utterance_id"])
+            status = "submitted" if candidate_id in submitted else "not submitted"
+            excerpt = str(candidate["utterance_text"]).replace("\n", " ")[:55]
+            utterance_choices[
+                f"#{int(candidate['utterance_order'])} — {candidate['speaker_id']} — {excerpt} — {status}"
+            ] = candidate_id
+    selected_utterance_label = st.selectbox(
+        "Move to a specific utterance in that dispute",
+        list(utterance_choices),
+        index=None,
+        placeholder="Choose an utterance",
+        disabled=selected_dispute_id is None,
+        key=f"utterance_selector_{uid}",
+    )
+    open_col, utterance_col, decision_col = st.columns(3)
     if selected_dispute_label and open_col.button("Open selected dispute →", key=f"utterance_open_dispute_{uid}"):
-        utterance_navigation_request = ("dispute_choice", navigation_choices[selected_dispute_label])
+        utterance_navigation_request = ("dispute_choice", selected_dispute_id)
+    if selected_utterance_label and utterance_col.button(
+        "Open selected utterance →", key=f"utterance_open_selected_{uid}"
+    ):
+        utterance_navigation_request = ("utterance_choice", utterance_choices[selected_utterance_label])
     if did in completed_disputes and decision_col.button(
         "Review dispute decision →", key=f"utterance_review_dispute_{uid}"
     ):
@@ -544,7 +576,7 @@ with reading.container(height=700, border=False, key="reading_pane"):
     def render_prior(turn):
         turn_id = str(turn["utterance_id"])
         prior_values = prior_annotations.get(turn_id, {})
-        badges = []
+        badges = [f"#{int(turn['utterance_order'])}"]
         if turn_id == direct_id:
             badges.append("Reply target")
         if prior_values.get("KS_present") == 1:
@@ -616,6 +648,9 @@ with coding.container(height=700, border=False, key="coding_pane"):
         if values["coder_notes"].strip():
             answered.add("coder_notes")
             st.caption("Coder note entered; save the draft or submit to record it.")
+        else:
+            values["coder_notes"] = None
+            answered.discard("coder_notes")
 
     if st.session_state.annotation_stage == 1:
         st.subheader("Stage 1 · Identify what is present")
@@ -668,6 +703,27 @@ with coding.container(height=700, border=False, key="coding_pane"):
             ): f"#{int(turn['utterance_order'])} — {turn['speaker_id']} — {str(turn['utterance_text'])[:55]}"
             for _, turn in earlier_turns.iterrows()
         }
+
+        def set_optional_utterance_links(
+            name: str,
+            prompt: str,
+            description: str,
+            options: tuple[str, ...],
+        ) -> None:
+            task_intro(tasks, prompt, description=description)
+            values[name] = st.multiselect(
+                prompt,
+                list(options),
+                default=values.get(name) or [],
+                format_func=labels.get,
+                key=f"ids_{name}_{uid}",
+                label_visibility="collapsed",
+            )
+            if values[name]:
+                answered.add(name)
+            else:
+                answered.discard(name)
+
         if values.get("KS_present") == 1:
             st.markdown("#### Knowledge staking details")
             for name in (
@@ -686,7 +742,7 @@ with coding.container(height=700, border=False, key="coding_pane"):
                     )
                     values["KS_prior_utterance_ids"] = st.multiselect(
                         "Earlier KS utterances (optional)",
-                        list(labels),
+                        list(context.earlier_ks_ids),
                         default=values.get("KS_prior_utterance_ids") or [],
                         format_func=labels.get,
                         key=f"ids_KS_prior_utterance_ids_{uid}",
@@ -767,56 +823,27 @@ with coding.container(height=700, border=False, key="coding_pane"):
                     answered.add("KI_explicit_feedback")
             if context.earlier_ks:
                 set_binary("KI_prior_knowledge")
-            needs_upstream = (
-                values.get("KI_iterate") == 1
-                or values.get("KI_explicit_feedback") in {"accept", "reject", "mixed_or_conditional"}
-                or values.get("KI_prior_knowledge") == 1
-            )
-            if needs_upstream:
-                task_intro(
-                    tasks,
-                    "Which earlier utterances are upstream? (optional)",
-                    description="Select strictly earlier utterances used for iteration, feedback, or prior knowledge.",
+            if values.get("KI_prior_knowledge") == 1:
+                set_optional_utterance_links(
+                    "KI_prior_knowledge_utterance_ids",
+                    "Which earlier KS utterance(s) supplied knowledge to this KI utterance? (optional)",
+                    "Select strictly earlier KS utterances whose staked knowledge is integrated into the focal KI.",
+                    context.earlier_ks_ids,
                 )
-                values["KI_upstream_utterance_ids"] = st.multiselect(
-                    "Upstream utterances (optional)",
-                    list(labels),
-                    default=values.get("KI_upstream_utterance_ids") or [],
-                    format_func=labels.get,
-                    key=f"ids_KI_upstream_utterance_ids_{uid}",
-                    label_visibility="collapsed",
+            if values.get("KI_iterate") == 1:
+                set_optional_utterance_links(
+                    "KI_iteration_utterance_ids",
+                    "Which earlier KI utterance(s) does this KI utterance iterate on? (optional)",
+                    "Select strictly earlier KI utterances whose proposed or enacted edits are developed here.",
+                    context.earlier_ki_ids,
                 )
-                if values["KI_upstream_utterance_ids"]:
-                    answered.add("KI_upstream_utterance_ids")
-            task_intro(
-                tasks,
-                "Record the KI evidence span (optional)",
-                description="Copy the focal text that supports the KI coding, if useful for audit.",
-            )
-            values["KI_evidence_span"] = st.text_area(
-                "KI evidence span",
-                value=values.get("KI_evidence_span") or "",
-                key=f"text_KI_evidence_span_{uid}",
-                label_visibility="collapsed",
-            )
-            if values["KI_evidence_span"].strip():
-                answered.add("KI_evidence_span")
-
-        if any(values.get(name) == 1 for name in BASE_BINARY[2:]):
-            st.markdown("#### Control evidence (optional)")
-            task_intro(
-                tasks,
-                "Record the control evidence span (optional)",
-                description="Copy the focal text that supports any positive control coding, if useful for audit.",
-            )
-            values["control_evidence_span"] = st.text_area(
-                "Control evidence span",
-                value=values.get("control_evidence_span") or "",
-                key=f"text_control_evidence_span_{uid}",
-                label_visibility="collapsed",
-            )
-            if values["control_evidence_span"].strip():
-                answered.add("control_evidence_span")
+            if values.get("KI_explicit_feedback") in {"accept", "reject", "mixed_or_conditional"}:
+                set_optional_utterance_links(
+                    "KI_feedback_utterance_ids",
+                    "Which earlier KI utterance(s) receive explicit feedback from this KI utterance? (optional)",
+                    "Select strictly earlier KI utterances to which the focal feedback pertains.",
+                    context.earlier_ki_ids,
+                )
         if not any(values.get(name) == 1 for name in BASE_BINARY):
             st.info("No detailed fields apply. Complete confidence and review below.")
 
@@ -890,6 +917,9 @@ with coding.container(height=700, border=False, key="coding_pane"):
         request_kind, request_value = utterance_navigation_request
         if request_kind == "utterance":
             destination = Destination("utterance", request_value, did)
+        elif request_kind == "utterance_choice":
+            target_row = frame[frame["utterance_id"].astype(str) == str(request_value)].iloc[0]
+            destination = Destination("utterance", request_value, str(target_row["dispute_id"]))
         elif request_kind in {"dispute_choice", "dispute_decision"}:
             destination = dispute_destination(dataset, str(request_value), fresh_submitted, completed_disputes)
         else:
