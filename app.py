@@ -233,7 +233,7 @@ with reading.container(height=650, border=False, key="utterance_reading_pane"):
         prior_comment(turn, badges)
 
 PROMPTS = {
-    "KS_present": "Does this utterance state or challenge substantive knowledge about the article or dispute?",
+    "KS_present": "Does this utterance state or challenge knowledge about the article or dispute?",
     "KS_claim_present": "Does it make a substantive claim?",
     "KS_evidence_reference": "Does it directly refer to evidence or another supporting basis?",
     "KS_reasoning": "Does it connect evidence or a premise to a conclusion?",

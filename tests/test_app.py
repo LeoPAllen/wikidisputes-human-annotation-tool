@@ -30,9 +30,7 @@ def radio(app, label):
 
 
 def answer_all(app, ks=0, ki=0):
-    radio(app, "Does this utterance state or challenge substantive knowledge about the article or dispute?").set_value(
-        ks
-    )
+    radio(app, "Does this utterance state or challenge knowledge about the article or dispute?").set_value(ks)
     app = app.run()
     if ks:
         for label in (
@@ -62,9 +60,7 @@ def test_inline_workflow_has_no_stages_and_conditional_children(monkeypatch, syn
     app = enter(configured(monkeypatch, synthetic_project))
     labels = {item.label for item in app.radio}
     assert "Does it make a substantive claim?" not in labels
-    radio(app, "Does this utterance state or challenge substantive knowledge about the article or dispute?").set_value(
-        1
-    )
+    radio(app, "Does this utterance state or challenge knowledge about the article or dispute?").set_value(1)
     radio(app, "Does this utterance propose, report, or refine an article edit?").set_value(1)
     app = app.run()
     labels = {item.label for item in app.radio}
@@ -89,14 +85,10 @@ KI_CHILD_LABELS = (
 
 def test_parent_change_hides_and_clears_children(monkeypatch, synthetic_project):
     app = enter(configured(monkeypatch, synthetic_project))
-    radio(app, "Does this utterance state or challenge substantive knowledge about the article or dispute?").set_value(
-        1
-    )
+    radio(app, "Does this utterance state or challenge knowledge about the article or dispute?").set_value(1)
     app = app.run()
     radio(app, KS_CHILD_LABELS[3]).set_value(1)
-    radio(app, "Does this utterance state or challenge substantive knowledge about the article or dispute?").set_value(
-        0
-    )
+    radio(app, "Does this utterance state or challenge knowledge about the article or dispute?").set_value(0)
     app = app.run()
     assert not set(KS_CHILD_LABELS) & {item.label for item in app.radio}
 
