@@ -27,6 +27,24 @@ def test_binary_guidance_does_not_change_digits_within_larger_numbers():
     assert binary_guidance_text("Use schema 10 and retain 2021.") == "Use schema 10 and retain 2021."
 
 
+def test_pane_scroll_css_preserves_mobile_document_flow(monkeypatch):
+    rendered = []
+
+    class FakeStreamlit:
+        def markdown(self, value, **kwargs):
+            rendered.append(value)
+
+    monkeypatch.setattr(components, "st", FakeStreamlit())
+    components.inject_css()
+    css = "".join(rendered)
+
+    assert ".st-key-utterance_reading_pane" in css
+    assert ".st-key-utterance_coding_pane" in css
+    assert "scrollbar-gutter: stable" in css
+    assert "@media (max-width: 768px)" in css
+    assert "overflow-y: visible" in css
+
+
 def test_binary_task_renders_heading_guidance_then_answer(monkeypatch):
     calls = []
 

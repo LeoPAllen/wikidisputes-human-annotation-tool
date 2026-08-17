@@ -1,51 +1,37 @@
-"""Streamlit entry point for local WikiDisputes annotation."""
+"""Streamlit composition for the simplified WikiDisputes workflow."""
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 import os
 import time
 
-import pandas as pd
 import streamlit as st
 
 from wikidisputes_ui.codebook import file_fingerprint, load_codebook, schema_id
 from wikidisputes_ui.config import load_config
 from wikidisputes_ui.export import build_export, safe_export_name
 from wikidisputes_ui.ingest import article_title, read_gold
-from wikidisputes_ui.models import BASE_BINARY, ContextState, applicable_fields, normalize_and_validate
-from wikidisputes_ui.navigation import (
-    Destination,
-    dispute_destination,
-    dispute_progress,
-    is_reviewable_without_gap,
-    previous_utterance,
-)
-from wikidisputes_ui.storage import SchemaDriftError, Storage
+from wikidisputes_ui.models import BASE_BINARY, KI_FIELDS, KS_FIELDS, applicable_fields, normalize_and_validate
+from wikidisputes_ui.navigation import dispute_destination, dispute_progress, previous_utterance
+from wikidisputes_ui.storage import Storage
 from wikidisputes_ui.ui_components import (
     TaskCounter,
-    binary_control,
     binary_task,
-    discussion_heading,
     focal_card,
     inject_css,
     prior_comment,
     source_details,
     task_heading,
     task_intro,
-    turn_card,
 )
 from wikidisputes_ui.validation import render_report, validate_inputs
 
 st.set_page_config(page_title="WikiDisputes annotation", page_icon="✎", layout="wide")
 inject_css()
-
 config_path = os.environ.get("WIKIDISPUTES_CONFIG", "config/project.toml")
 initial_config = load_config(config_path)
-
-
-def cache_fingerprint(path):
-    return file_fingerprint(path) if path.is_file() else f"missing:{path}"
 
 
 def opened_at() -> str:
@@ -53,8 +39,8 @@ def opened_at() -> str:
 
 
 @st.cache_resource
-def resources(config_file: str, codebook_fingerprint: str, gold_fingerprint: str):
-    del codebook_fingerprint, gold_fingerprint  # Values are cache keys; loading below remains authoritative.
+def resources(config_file: str, codebook_hash: str, gold_hash: str):
+    del codebook_hash, gold_hash
     config = load_config(config_file)
     qc = validate_inputs(config)
     if qc.blocking:
@@ -70,20 +56,13 @@ def resources(config_file: str, codebook_fingerprint: str, gold_fingerprint: str
 
 try:
     config, qc, codebook, dataset, storage = resources(
-        str(config_path),
-        cache_fingerprint(initial_config.codebook_path),
-        cache_fingerprint(initial_config.gold_path),
+        str(config_path), file_fingerprint(initial_config.codebook_path), file_fingerprint(initial_config.gold_path)
     )
-except SchemaDriftError as exc:
-    st.error(f"Schema registration stopped: {exc}")
-    st.stop()
 except Exception as exc:
     st.error(f"Startup failed: {exc}")
     st.stop()
-
 if qc.blocking:
     st.title("Input quality check blocked annotation")
-    st.error("The source workbook has blocking structural errors. No source data were changed.")
     st.markdown(render_report(qc, config))
     st.stop()
 
@@ -91,9 +70,7 @@ coder = storage.active_coder()
 active_schema_id = schema_id(codebook.file_hash)
 if coder is None:
     st.title("WikiDisputes annotation")
-    st.info(
-        "Your coder ID identifies your local work; it is not authentication. Use a pseudonymous ID assigned for this study."
-    )
+    st.info("Enter the pseudonymous coder ID assigned for this study.")
     with st.form("coder_entry"):
         coder_id = st.text_input("Coder ID", placeholder="e.g. coder_01")
         if st.form_submit_button("Continue", type="primary"):
@@ -104,827 +81,271 @@ if coder is None:
                 st.error(str(exc))
     st.stop()
 
+frame = dataset.annotatable_rows
+all_ids = set(frame["utterance_id"].astype(str))
+current_rows = [r for r in storage.rows("utterance_annotations", coder) if r["schema_hash"] == codebook.file_hash]
+submitted = {
+    str(r["utterance_id"]): r for r in current_rows if r["status"] == "submitted" and str(r["utterance_id"]) in all_ids
+}
+dispute_rows = [r for r in storage.rows("dispute_annotations", coder) if r["schema_hash"] == codebook.file_hash]
+completed_disputes = {str(r["dispute_id"]) for r in dispute_rows}
+
 st.sidebar.caption(f"Coder: **{coder}**")
 st.sidebar.caption(f"Schema: **{active_schema_id}**")
-if st.sidebar.button("Switch coder"):
-    st.session_state.confirm_switch = True
-if st.session_state.get("confirm_switch"):
-    st.sidebar.warning("Switching changes whose private annotations are shown.")
-    if st.sidebar.button("Confirm switch"):
-        with storage.connect() as db:
-            db.execute("UPDATE coders SET active=0")
-        st.session_state.clear()
-        st.rerun()
-
-export_data = build_export(storage, dataset, coder, active_schema_id, codebook.file_hash, tuple(codebook.fields))
 st.sidebar.download_button(
     "Export my annotations",
-    export_data,
+    build_export(storage, dataset, coder, active_schema_id, codebook.file_hash, tuple(codebook.fields)),
     safe_export_name(coder),
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 )
-st.sidebar.download_button(
-    "Download database backup",
-    storage.backup_bytes(),
-    f"wikidisputes_{coder}_backup.sqlite3",
-    "application/vnd.sqlite3",
-)
-
-frame = dataset.annotatable_rows
-annotatable_ids = set(frame["utterance_id"].astype(str))
-dispute_ids = set(frame["dispute_id"].astype(str))
-all_utterance_rows = storage.rows("utterance_annotations", coder)
-submitted_rows = [row for row in all_utterance_rows if row["schema_hash"] == codebook.file_hash]
-historical_count = sum(row["schema_hash"] != codebook.file_hash for row in all_utterance_rows)
-if historical_count:
-    st.sidebar.caption(
-        f"{historical_count} annotation projection(s) use earlier codebooks. They remain in the database backup but "
-        "are excluded from this schema-locked Excel export."
-    )
-submitted = {
-    str(row["utterance_id"]): row
-    for row in submitted_rows
-    if row["status"] == "submitted" and str(row["utterance_id"]) in annotatable_ids
-}
-dispute_rows = [row for row in storage.rows("dispute_annotations", coder) if row["schema_hash"] == codebook.file_hash]
-completed_disputes = {str(row["dispute_id"]) for row in dispute_rows if str(row["dispute_id"]) in dispute_ids}
-review_count = sum(bool(__import__("json").loads(row["payload_json"]).get("review_flag")) for row in submitted.values())
+if st.sidebar.button("Switch coder"):
+    with storage.connect() as db:
+        db.execute("UPDATE coders SET active=0")
+    st.session_state.clear()
+    st.rerun()
 
 
-def apply_destination(destination: Destination) -> None:
-    """Update only destination-specific session state."""
-    st.session_state.page = destination.page
-    if destination.unit_id is not None:
-        st.session_state.unit_id = destination.unit_id
-    if destination.dispute_id is not None:
-        st.session_state.dispute_id = destination.dispute_id
+def go(page: str, *, uid: str | None = None, did: str | None = None) -> None:
+    st.session_state.page = page
+    if uid is not None:
+        st.session_state.unit_id = uid
+    if did is not None:
+        st.session_state.dispute_id = did
 
 
-def active_submitted_ids() -> set[str]:
-    return {
-        str(item["utterance_id"])
-        for item in storage.rows("utterance_annotations", coder)
-        if item["schema_hash"] == codebook.file_hash and item["status"] == "submitted"
-    }
-
-
-def dispute_navigation_choices() -> dict[str, str]:
+def dispute_choices() -> dict[str, str]:
     choices = {}
-    submitted_ids = set(submitted)
-    for dispute_id in frame["dispute_id"].drop_duplicates():
-        dispute_id = str(dispute_id)
-        turns = dataset.annotatable_in_dispute(dispute_id)
-        first = turns.iloc[0]
-        done, total = dispute_progress(dataset, dispute_id, submitted_ids)
-        status = "complete" if dispute_id in completed_disputes else f"{done}/{total} utterances"
-        choices[f"{article_title(first)} · {dispute_id} · {status}"] = dispute_id
+    for did in frame["dispute_id"].drop_duplicates().astype(str):
+        turns = dataset.annotatable_in_dispute(did)
+        done, total = dispute_progress(dataset, did, set(submitted))
+        choices[f"{article_title(turns.iloc[0])} · {did} · {done}/{total}"] = did
     return choices
 
 
 if "page" not in st.session_state:
     st.session_state.page = "home"
-if st.session_state.get("navigation_notice"):
-    st.success(st.session_state.pop("navigation_notice"))
 
 if st.session_state.page == "home":
     st.title("Annotation workspace")
-    cols = st.columns(4)
-    cols[0].metric("Utterances", f"{len(submitted)} / {len(frame)}")
-    cols[1].metric("Disputes", f"{len(completed_disputes)} / {frame['dispute_id'].nunique()}")
-    cols[2].metric("Progress", f"{100 * len(submitted) / max(1, len(frame)):.1f}%")
-    cols[3].metric("Review flags", review_count)
-    with st.container(border=True):
-        st.markdown("**Open a dispute**")
-        navigation_choices = dispute_navigation_choices()
-        selected_dispute_label = st.selectbox(
-            "Dispute",
-            list(navigation_choices),
-            index=None,
-            placeholder="Choose an article and dispute",
-            key="workspace_dispute_selector",
-        )
-        if selected_dispute_label and st.button("Open dispute →", key="workspace_open_dispute"):
-            destination = dispute_destination(
-                dataset,
-                navigation_choices[selected_dispute_label],
-                set(submitted),
-                completed_disputes,
-            )
-            apply_destination(destination)
-            st.rerun()
-    ready_for_dispute = []
-    for dispute_id in frame["dispute_id"].drop_duplicates():
-        dispute_id = str(dispute_id)
-        unit_ids = set(dataset.annotatable_in_dispute(dispute_id)["utterance_id"].astype(str))
-        if unit_ids <= set(submitted) and dispute_id not in completed_disputes:
-            ready_for_dispute.append(dispute_id)
+    st.metric("Utterances submitted", f"{len(submitted)} / {len(frame)}")
+    choices = dispute_choices()
+    selected = st.selectbox("Dispute", list(choices), index=None, placeholder="Choose an article and dispute")
+    if selected and st.button("Open dispute →", type="primary"):
+        destination = dispute_destination(dataset, choices[selected], set(submitted), completed_disputes)
+        go(destination.page, uid=destination.unit_id, did=destination.dispute_id or choices[selected])
+        st.rerun()
     next_rows = frame[~frame["utterance_id"].astype(str).isin(submitted)]
-    if ready_for_dispute:
-        st.write(f"Next: complete the dispute-level decision for **{ready_for_dispute[0]}**.")
-        if st.button("Complete dispute", type="primary"):
-            st.session_state.page = "dispute"
-            st.session_state.dispute_id = ready_for_dispute[0]
-            st.session_state.dispute_timer_start = time.monotonic()
-            st.session_state.dispute_opened_at = opened_at()
-            st.rerun()
-    elif not next_rows.empty:
-        next_row = next_rows.iloc[0]
-        st.write(f"Next: **{article_title(next_row)}**, utterance #{int(next_row['utterance_order'])}")
-        if st.button("Resume annotation", type="primary"):
-            st.session_state.unit_id = str(next_row["utterance_id"])
-            st.session_state.page = "utterance"
-            st.rerun()
-    else:
-        st.success("All utterances have been submitted. Complete any remaining dispute-level decisions.")
-        pending_disputes = [
-            str(dispute_id)
-            for dispute_id in frame["dispute_id"].drop_duplicates()
-            if str(dispute_id) not in completed_disputes
-        ]
-        if pending_disputes and st.button("Complete next dispute", type="primary"):
-            st.session_state.page = "dispute"
-            st.session_state.dispute_id = pending_disputes[0]
-            st.session_state.dispute_timer_start = time.monotonic()
-            st.session_state.dispute_opened_at = opened_at()
-            st.rerun()
-    if submitted:
-        choices = {}
-        for uid, submitted_row in submitted.items():
-            source = frame[frame["utterance_id"].astype(str) == uid].iloc[0]
-            if is_reviewable_without_gap(
-                dataset, str(source["dispute_id"]), int(source["utterance_order"]), set(submitted)
-            ):
-                choices[
-                    f"{article_title(source)} · #{int(source['utterance_order'])} · revision "
-                    f"{submitted_row['revision_number']}"
-                ] = uid
-        selected = st.selectbox(
-            "Review completed", list(choices), index=None, placeholder="Choose an earlier utterance"
-        )
-        if selected and st.button("Open for review"):
-            st.session_state.unit_id = choices[selected]
-            st.session_state.page = "utterance"
-            st.rerun()
-    if completed_disputes:
-        dispute_choice = st.selectbox(
-            "Review completed dispute",
-            sorted(completed_disputes),
-            index=None,
-            placeholder="Choose a dispute-level decision",
-        )
-        if dispute_choice and st.button("Open dispute decision"):
-            st.session_state.page = "dispute"
-            st.session_state.dispute_id = dispute_choice
-            st.session_state.dispute_timer_start = time.monotonic()
-            st.session_state.dispute_opened_at = opened_at()
-            st.rerun()
+    if not next_rows.empty and st.button("Resume annotation", type="primary"):
+        row = next_rows.iloc[0]
+        go("utterance", uid=str(row["utterance_id"]), did=str(row["dispute_id"]))
+        st.rerun()
     st.stop()
 
 if st.session_state.page == "dispute":
-    st.title("Complete dispute-level coding")
-    did = st.session_state.dispute_id
-    if st.session_state.get("dispute_timer_did") != did:
-        st.session_state.dispute_timer_did = did
-        st.session_state.dispute_timer_start = time.monotonic()
-        st.session_state.dispute_opened_at = opened_at()
-
-    pending_dispute_navigation = st.session_state.get("pending_dispute_navigation")
-    if pending_dispute_navigation:
-        st.warning("This dispute decision has unsaved changes. Discard them and navigate, or remain here.")
-        discard_col, remain_col = st.columns(2)
-        if discard_col.button("Discard changes and continue", type="primary"):
-            destination = Destination(**pending_dispute_navigation)
-            del st.session_state.pending_dispute_navigation
-            apply_destination(destination)
+    did = str(st.session_state.dispute_id)
+    required_ids = set(dataset.annotatable_in_dispute(did)["utterance_id"].astype(str))
+    if not required_ids <= set(submitted):
+        st.error("Submit every substantive utterance before completing the dispute-level decision.")
+        pending = dataset.annotatable_in_dispute(did)
+        pending = pending[~pending["utterance_id"].astype(str).isin(submitted)]
+        if st.button("Return to next utterance", type="primary"):
+            go("utterance", uid=str(pending.iloc[0]["utterance_id"]), did=did)
             st.rerun()
-        if remain_col.button("Remain on dispute"):
-            del st.session_state.pending_dispute_navigation
-            st.rerun()
-
-    dispute_navigation_request = None
-    with st.container(border=True):
-        st.markdown("**Navigation**")
-        workspace_col, utterance_col = st.columns(2)
-        if workspace_col.button("← Workspace", use_container_width=True, key="dispute_workspace"):
-            dispute_navigation_request = Destination("home")
-        if utterance_col.button("Review utterances →", use_container_width=True, key="dispute_review_turns"):
-            turns = dataset.annotatable_in_dispute(did)
-            dispute_navigation_request = Destination("utterance", str(turns.iloc[0]["utterance_id"]), did)
-        navigation_choices = dispute_navigation_choices()
-        selected_dispute_label = st.selectbox(
-            "Move to another dispute",
-            list(navigation_choices),
-            index=None,
-            placeholder="Choose an article and dispute",
-            key="dispute_screen_selector",
-        )
-        if selected_dispute_label and st.button("Open selected dispute →", key="dispute_screen_open"):
-            dispute_navigation_request = dispute_destination(
-                dataset,
-                navigation_choices[selected_dispute_label],
-                set(submitted),
-                completed_disputes,
-            )
-
-    full = dataset.full_dispute(did)
-    for _, turn in full.iterrows():
-        turn_card(turn)
-    existing_rows = [item for item in dispute_rows if str(item["dispute_id"]) == did]
-    existing = {} if not existing_rows else __import__("json").loads(existing_rows[0]["payload_json"])
+        st.stop()
+    st.title("Final dispute decision")
+    for _, turn in dataset.full_dispute(did).iterrows():
+        prior_comment(turn, (f"#{int(turn['utterance_order'])}",))
+    existing_row = next((r for r in dispute_rows if str(r["dispute_id"]) == did), None)
+    existing = {} if existing_row is None else json.loads(existing_row["payload_json"])
     tasks = TaskCounter()
-    object_options = sorted(codebook.dispute_objects)
-    object_definitions = {name: codebook.dispute_objects[name]["Definition"] for name in object_options}
     task_intro(
         tasks,
-        "What is the primary dispute object?",
+        "Which article issue mainly organizes this dispute?",
         codebook.fields["C_primary_dispute_object"],
-        controlled_values=object_definitions,
+        controlled_values=codebook.dispute_objects,
     )
+    options = list(codebook.dispute_objects)
     choice = st.radio(
-        "Primary dispute object",
-        object_options,
-        index=object_options.index(existing["C_primary_dispute_object"])
-        if existing.get("C_primary_dispute_object") in object_options
+        "C_primary_dispute_object",
+        options,
+        index=options.index(existing["C_primary_dispute_object"])
+        if existing.get("C_primary_dispute_object") in options
         else None,
-        label_visibility="collapsed",
+        format_func=lambda value: value.replace("_", " ").capitalize(),
     )
-    task_intro(tasks, "How confident are you in the dispute-level decision?", description="Choose from 1 to 5.")
-    confidence = st.radio(
-        "Dispute confidence",
-        range(1, 6),
-        index=existing["coder_confidence"] - 1 if existing.get("coder_confidence") in range(1, 6) else None,
-        horizontal=True,
-        label_visibility="collapsed",
-    )
-    task_intro(tasks, "Should this dispute-level decision be flagged for review?", description="Choose No or Yes.")
-    review = binary_control(
-        "Dispute review flag",
-        f"dispute_review_{did}",
-        existing.get("review_flag"),
-        label_visibility="collapsed",
-    )
-    task_heading(tasks, "Add an optional note")
-    dispute_note_key = f"dispute_coder_notes_{did}"
-    if dispute_note_key not in st.session_state:
-        st.session_state[dispute_note_key] = existing.get("coder_notes") or existing.get("short_justification") or ""
-    note = st.text_input(
-        "Optional coder note",
-        key=dispute_note_key,
-        placeholder="Write an optional note here",
-        label_visibility="collapsed",
-    )
-    current_dispute_values = {
-        "C_primary_dispute_object": choice,
-        "coder_confidence": confidence,
-        "review_flag": review,
-        "short_justification": None,
-        "coder_notes": note or None,
-    }
-    dispute_dirty = any(current_dispute_values.get(name) != existing.get(name) for name in current_dispute_values)
-    if dispute_navigation_request:
-        if dispute_dirty:
-            st.session_state.pending_dispute_navigation = {
-                "page": dispute_navigation_request.page,
-                "unit_id": dispute_navigation_request.unit_id,
-                "dispute_id": dispute_navigation_request.dispute_id,
-            }
-            st.rerun()
-        else:
-            apply_destination(dispute_navigation_request)
-            st.rerun()
-
     if st.button("Complete dispute", type="primary"):
-        errors = []
         if choice is None:
-            errors.append("Choose exactly one primary dispute object.")
-        if confidence is None:
-            errors.append("Choose dispute confidence.")
-        if review is None:
-            errors.append("Choose a dispute review flag.")
-        if errors:
-            for error in errors:
-                st.error(error)
+            st.error("Choose exactly one article issue.")
         else:
             storage.save_dispute(
                 coder=coder,
                 dispute_id=did,
-                payload=current_dispute_values,
-                answered_fields={"C_primary_dispute_object", "coder_confidence", "review_flag"},
+                payload={"C_primary_dispute_object": choice},
+                answered_fields={"C_primary_dispute_object"},
                 schema_version=active_schema_id,
                 schema_hash=codebook.file_hash,
-                opened_at=st.session_state.dispute_opened_at,
-                elapsed_wall_seconds=time.monotonic() - st.session_state.dispute_timer_start,
+                opened_at=opened_at(),
+                elapsed_wall_seconds=0,
             )
-            st.session_state.page = "home"
+            go("home")
             st.rerun()
-    if existing_rows:
-        with st.expander("Dispute decision history"):
-            history = [
-                item for item in storage.rows("dispute_annotation_events", coder) if str(item["dispute_id"]) == did
-            ]
-            for event in history:
-                st.write(f"Revision {event['revision_number']} · {event['event_type']} · {event['saved_at']}")
     st.stop()
 
-uid = st.session_state.unit_id
+uid = str(st.session_state.unit_id)
 matches = frame[frame["utterance_id"].astype(str) == uid]
 if matches.empty:
     st.error("Selected utterance is not annotatable.")
     st.stop()
 row = matches.iloc[0]
-did = str(row["dispute_id"])
-order = int(row["utterance_order"])
+did, order = str(row["dispute_id"]), int(row["utterance_order"])
 prior = dataset.displayable_prior_context(did, order)
-earlier_turns = dataset.earlier_annotatable_turns(did, order)
 current = storage.current_utterance(coder, uid)
 if current and current["schema_hash"] != codebook.file_hash:
     current = None
-prior_annotations = {
-    str(item["utterance_id"]): __import__("json").loads(item["payload_json"])
-    for item in submitted_rows
-    if item["status"] == "submitted"
-    and str(item["dispute_id"]) == did
-    and str(item["utterance_id"]) in set(earlier_turns["utterance_id"].astype(str))
-}
-context = ContextState(
-    earlier_ids=tuple(earlier_turns["utterance_id"].astype(str)),
-    earlier_ks=any(v.get("KS_present") == 1 for v in prior_annotations.values()),
-    earlier_ki_attempt=any(v.get("KI_present") == 1 for v in prior_annotations.values()),
-    earlier_ks_ids=tuple(
-        turn_id
-        for turn_id in earlier_turns["utterance_id"].astype(str)
-        if prior_annotations.get(turn_id, {}).get("KS_present") == 1
-    ),
-    earlier_ki_ids=tuple(
-        turn_id
-        for turn_id in earlier_turns["utterance_id"].astype(str)
-        if prior_annotations.get(turn_id, {}).get("KI_present") == 1
-    ),
-)
-defaults = {} if not current else current["payload"]
+defaults = {} if current is None else current["payload"]
 if st.session_state.get("timer_uid") != uid:
     st.session_state.timer_uid = uid
     st.session_state.utterance_timer_start = time.monotonic()
     st.session_state.utterance_opened_at = opened_at()
 
-utterance_navigation_request: tuple[str, str | None] | None = None
 with st.container(border=True):
-    st.markdown("**Navigation**")
-    previous_id = previous_utterance(dataset, did, order)
-    previous_col, workspace_col = st.columns(2)
-    if previous_col.button(
-        "← Previous utterance",
-        disabled=previous_id is None,
-        use_container_width=True,
-        key=f"previous_{uid}",
-    ):
-        utterance_navigation_request = ("utterance", previous_id)
-    if workspace_col.button("← Workspace", use_container_width=True, key=f"workspace_{uid}"):
-        utterance_navigation_request = ("home", None)
-    navigation_choices = dispute_navigation_choices()
-    selected_dispute_label = st.selectbox(
-        "Move to another dispute",
-        list(navigation_choices),
-        index=None,
-        placeholder="Choose an article and dispute",
-        key=f"utterance_dispute_selector_{uid}",
-    )
-    selected_dispute_id = navigation_choices.get(selected_dispute_label)
-    utterance_choices = {}
-    if selected_dispute_id is not None:
-        for _, candidate in dataset.annotatable_in_dispute(selected_dispute_id).iterrows():
-            candidate_id = str(candidate["utterance_id"])
-            status = "submitted" if candidate_id in submitted else "not submitted"
-            excerpt = str(candidate["utterance_text"]).replace("\n", " ")[:55]
-            utterance_choices[
-                f"#{int(candidate['utterance_order'])} — {candidate['speaker_id']} — {excerpt} — {status}"
-            ] = candidate_id
-    selected_utterance_label = st.selectbox(
-        "Move to a specific utterance in that dispute",
-        list(utterance_choices),
-        index=None,
-        placeholder="Choose an utterance",
-        disabled=selected_dispute_id is None,
-        key=f"utterance_selector_{uid}",
-    )
-    open_col, utterance_col, decision_col = st.columns(3)
-    if selected_dispute_label and open_col.button("Open selected dispute →", key=f"utterance_open_dispute_{uid}"):
-        utterance_navigation_request = ("dispute_choice", selected_dispute_id)
-    if selected_utterance_label and utterance_col.button(
-        "Open selected utterance →", key=f"utterance_open_selected_{uid}"
-    ):
-        utterance_navigation_request = ("utterance_choice", utterance_choices[selected_utterance_label])
-    if did in completed_disputes and decision_col.button(
-        "Review dispute decision →", key=f"utterance_review_dispute_{uid}"
-    ):
-        utterance_navigation_request = ("dispute_decision", did)
+    left, right = st.columns(2)
+    previous = previous_utterance(dataset, did, order)
+    if left.button("← Previous utterance", disabled=previous is None):
+        go("utterance", uid=previous, did=did)
+        st.rerun()
+    if right.button("← Workspace"):
+        go("home")
+        st.rerun()
 
 st.progress(len(submitted) / max(1, len(frame)), text=f"{len(submitted)} of {len(frame)} utterances submitted")
-
-gateway_labels = {
-    "KS_present": "Knowledge staking (KS)",
-    "KI_present": "Knowledge integration (KI)",
-    "C_off_topic_shift": "Off-topic shift",
-    "C_interpersonal_attack_or_disrespect": "Interpersonal attack or disrespect",
-    "C_formal_governance_action": "Formal governance action",
-}
-field_labels = {
-    "KS_claim_target_specified": "Makes at least one specific claim about a target issue",
-    "KS_evidence_present": "Shares supporting evidence",
-    "KS_warrant_reasoning": "Develops a line of reasoning",
-    "KS_unelaborated_restaking": "Unelaborated restaking of earlier knowledge",
-    "KI_propose_edit": "Proposes an edit",
-    "KI_report_enacted_edit": "Reports an enacted edit",
-    "KI_solicit_feedback": "Solicits feedback",
-    "KI_iterate": "Develops an earlier proposed or enacted edit",
-    "KI_prior_knowledge": "Uses previously staked knowledge",
-}
-
-if st.session_state.get("stage_uid") != uid:
-    st.session_state.stage_uid = uid
-    gateways_complete = current is not None and set(BASE_BINARY) <= set(current["answered_fields"])
-    st.session_state.annotation_stage = 2 if gateways_complete else 1
-
-context_rows = prior[prior["utterance_role"] == "context"]
-context_row = None if context_rows.empty else context_rows.iloc[0]
-target = row.get("reply_to_utterance_id")
-direct = prior[prior["utterance_id"].astype(str) == str(target)] if not pd.isna(target) else prior.iloc[0:0]
-if not direct.empty and direct.iloc[0].get("utterance_role") == "utterance":
-    target_turn = direct.iloc[0]
-    reply_description = f"Replying to {target_turn['speaker_id']} (#{int(target_turn['utterance_order'])})"
-elif not direct.empty and direct.iloc[0].get("utterance_role") == "context":
-    reply_description = "Replies to section heading"
-elif not pd.isna(target):
-    reply_description = "Reply target unavailable within prior context"
-else:
-    reply_description = None
-
 reading, coding = st.columns([0.56, 0.44], gap="large")
-with reading.container(height=700, border=False, key="reading_pane"):
-    if context_row is not None:
-        discussion_heading(context_row)
-    else:
-        st.caption(article_title(row))
-    focal_card(row, reply_description)
+with reading.container(height=650, border=False, key="utterance_reading_pane"):
+    focal_card(row, None)
     source_details(row)
     st.subheader("Earlier conversation")
-    prior_turns = prior[prior["utterance_role"] == "utterance"]
-    if prior_turns.empty:
-        st.caption("No earlier substantive turns. Future turns are never shown here.")
-    direct_id = None if direct.empty or direct.iloc[0].get("utterance_role") != "utterance" else str(target)
+    if prior.empty:
+        st.caption("No earlier conversation. Future turns are never shown here.")
+    for _, turn in prior.iterrows():
+        badges = (f"#{int(turn['utterance_order'])}",)
+        if turn["utterance_role"] == "context":
+            badges += ("Context — not annotated",)
+        prior_comment(turn, badges)
 
-    def render_prior(turn):
-        turn_id = str(turn["utterance_id"])
-        prior_values = prior_annotations.get(turn_id, {})
-        badges = [f"#{int(turn['utterance_order'])}"]
-        if turn_id == direct_id:
-            badges.append("Reply target")
-        if prior_values.get("KS_present") == 1:
-            badges.append("Earlier KS")
-        if prior_values.get("KI_present") == 1:
-            badges.append("Earlier KI")
-        prior_comment(turn, tuple(badges))
-
-    for _, turn in prior_turns.iterrows():
-        render_prior(turn)
-    if not pd.isna(target) and direct.empty:
-        st.info("The reply target is not available within the strict prior-context boundary; its text is not shown.")
-
-with coding.container(height=700, border=False, key="coding_pane"):
+PROMPTS = {
+    "KS_present": "Does this utterance state or challenge substantive knowledge about the article or dispute?",
+    "KS_claim_present": "Does it make a substantive claim?",
+    "KS_evidence_reference": "Does it directly refer to evidence or another supporting basis?",
+    "KS_reasoning": "Does it connect evidence or a premise to a conclusion?",
+    "KS_restaking": "Does it repeat an earlier claim or objection without adding evidence or reasoning?",
+    "KI_present": "Does this utterance propose, report, or refine an article edit?",
+    "KI_solicit_feedback": "Does it ask others to assess, revise, or accept that edit?",
+    "KI_compromise_position": "Does the edit visibly accommodate at least two positions or concerns?",
+    "C_off_topic_shift": "Does this shift away from the article dispute?",
+    "C_interpersonal_attack_or_disrespect": "Does this attack or disrespect another contributor?",
+    "C_formal_governance_action": "Does this invoke or threaten a formal governance action?",
+}
+with coding.container(height=430, border=False, key="utterance_coding_pane"):
     values = dict(defaults)
-    presence_edits_key = f"presence_edits_{uid}"
-    values.update(st.session_state.get(presence_edits_key, {}))
-    answered = set() if not current else set(current["answered_fields"])
+    answered = set() if current is None else set(current["answered_fields"])
     tasks = TaskCounter()
 
-    def set_binary(name: str, label: str | None = None, key_prefix: str = "field") -> None:
-        visible_label = label or field_labels.get(name, name)
-        widget_key = f"{key_prefix}_{name}_{uid}"
-
-        def remember_presence_change() -> None:
-            edits = dict(st.session_state.get(presence_edits_key, {}))
-            edits[name] = st.session_state[widget_key]
-            st.session_state[presence_edits_key] = edits
-
-        value = binary_task(
-            tasks,
-            visible_label,
-            codebook.fields[name],
-            widget_key,
-            values.get(name),
-            on_change=remember_presence_change if key_prefix == "gateway" else None,
+    def ask(name: str) -> None:
+        values[name] = binary_task(
+            tasks, PROMPTS[name], codebook.fields[name], f"answer_{name}_{uid}", values.get(name)
         )
-        values[name] = value
-        if value is not None:
+        if values[name] is None:
+            answered.discard(name)
+        else:
             answered.add(name)
 
-    def save_result(result, submit: bool):
-        stored_answered = answered & applicable_fields(result.payload, context, config.low_confidence_threshold)
-        return storage.save_utterance(
-            coder=coder,
-            utterance_id=uid,
-            dispute_id=did,
-            payload=result.payload,
-            answered_fields=stored_answered,
-            submit=submit,
-            schema_version=active_schema_id,
-            schema_hash=codebook.file_hash,
-            opened_at=st.session_state.utterance_opened_at,
-            elapsed_wall_seconds=time.monotonic() - st.session_state.utterance_timer_start,
-        )
-
-    def render_optional_note() -> None:
-        values["short_justification"] = None
-        task_heading(tasks, "Add an optional note")
-        note_key = f"text_coder_notes_{uid}"
-        if note_key not in st.session_state:
-            st.session_state[note_key] = values.get("coder_notes") or defaults.get("short_justification") or ""
-        values["coder_notes"] = st.text_input(
-            "Optional coder note",
-            key=note_key,
-            placeholder="Write an optional note here",
-            label_visibility="collapsed",
-        )
-        if values["coder_notes"].strip():
-            answered.add("coder_notes")
-            st.caption("Coder note entered; save the draft or submit to record it.")
-        else:
-            values["coder_notes"] = None
-            answered.discard("coder_notes")
-
-    if st.session_state.annotation_stage == 1:
-        st.subheader("Stage 1 · Identify what is present")
-        for name in BASE_BINARY[:2]:
-            set_binary(name, gateway_labels[name], "gateway")
-        st.markdown("#### Controls")
-        for name in BASE_BINARY[2:]:
-            set_binary(name, gateway_labels[name], "gateway")
-        render_optional_note()
-        clearing = [name for name in BASE_BINARY if defaults.get(name) == 1 and values.get(name) == 0]
-        if clearing:
-            st.warning(
-                "Continuing will clear child answers that no longer apply for: "
-                + ", ".join(gateway_labels[name] for name in clearing)
-                + "."
-            )
-        if st.button("Apply changes and continue" if clearing else "Continue to details", type="primary"):
-            missing = [name for name in BASE_BINARY if values.get(name) not in (0, 1)]
-            if missing:
-                for name in missing:
-                    st.error(f"Answer {gateway_labels[name]} before continuing.")
-            else:
-                result = normalize_and_validate(
-                    values, answered, context, set(codebook.evidence_types), config.low_confidence_threshold, False
-                )
-                save_result(result, False)
-                st.session_state.pop(presence_edits_key, None)
-                st.session_state.annotation_stage = 2
-                st.rerun()
+    ask("KS_present")
+    if values["KS_present"] == 1:
+        with st.container(border=True):
+            st.caption("Knowledge staking details")
+            for name in KS_FIELDS:
+                ask(name)
     else:
-        st.subheader("Stage 2 · Code applicable details")
-        summary = " · ".join(
-            f"{label}: {'Yes' if values.get(name) == 1 else 'No'}"
-            for name, label in (
-                ("KS_present", "KS"),
-                ("KI_present", "KI"),
-                ("C_off_topic_shift", "Off-topic"),
-                ("C_interpersonal_attack_or_disrespect", "Attack/disrespect"),
-                ("C_formal_governance_action", "Governance"),
-            )
+        for name in KS_FIELDS:
+            values[name] = None
+            answered.discard(name)
+    ask("KI_present")
+    if values["KI_present"] == 1:
+        with st.container(border=True):
+            st.caption("Knowledge integration details")
+            for name in KI_FIELDS:
+                ask(name)
+    else:
+        for name in KI_FIELDS:
+            values[name] = None
+            answered.discard(name)
+    for name in BASE_BINARY[2:]:
+        ask(name)
+    task_intro(tasks, "How confident are you in this utterance annotation?", description="Choose 1 through 5.")
+    confidence_options = list(range(1, 6))
+    values["coder_confidence"] = st.radio(
+        "How confident are you in this utterance annotation?",
+        confidence_options,
+        index=confidence_options.index(values["coder_confidence"])
+        if values.get("coder_confidence") in confidence_options
+        else None,
+        horizontal=True,
+        key=f"coder_confidence_{uid}",
+        label_visibility="collapsed",
+    )
+    if values["coder_confidence"] is not None:
+        answered.add("coder_confidence")
+    task_intro(tasks, "Flag this utterance for review?", description="Choose No or Yes.")
+    values["review_flag"] = st.radio(
+        "Flag this utterance for review?",
+        [0, 1],
+        index=[0, 1].index(values["review_flag"]) if values.get("review_flag") in (0, 1) else None,
+        format_func=lambda value: "No" if value == 0 else "Yes",
+        horizontal=True,
+        key=f"review_flag_{uid}",
+        label_visibility="collapsed",
+    )
+    if values["review_flag"] is not None:
+        answered.add("review_flag")
+
+with coding:
+    task_heading(tasks, "Optional comment")
+    values["coder_notes"] = (
+        st.text_area(
+            "Optional comment",
+            value=values.get("coder_notes") or "",
+            key=f"coder_notes_{uid}",
         )
-        st.caption(summary)
-        if st.button("Change presence answers"):
-            st.session_state.annotation_stage = 1
-            st.rerun()
+        or None
+    )
+    if values["coder_notes"]:
+        answered.add("coder_notes")
+    else:
+        answered.discard("coder_notes")
 
-        labels = {
-            str(
-                turn["utterance_id"]
-            ): f"#{int(turn['utterance_order'])} — {turn['speaker_id']} — {str(turn['utterance_text'])[:55]}"
-            for _, turn in earlier_turns.iterrows()
-        }
-
-        def set_optional_utterance_links(
-            name: str,
-            prompt: str,
-            description: str,
-            options: tuple[str, ...],
-        ) -> None:
-            task_intro(tasks, prompt, description=description)
-            values[name] = st.multiselect(
-                prompt,
-                list(options),
-                default=values.get(name) or [],
-                format_func=labels.get,
-                key=f"ids_{name}_{uid}",
-                label_visibility="collapsed",
-            )
-            if values[name]:
-                answered.add(name)
-            else:
-                answered.discard(name)
-
-        if values.get("KS_present") == 1:
-            st.markdown("#### Knowledge staking details")
-            for name in (
-                "KS_claim_target_specified",
-                "KS_evidence_present",
-                "KS_warrant_reasoning",
-            ):
-                set_binary(name)
-            if context.earlier_ks:
-                set_binary("KS_unelaborated_restaking")
-                if values.get("KS_unelaborated_restaking") == 1:
-                    task_intro(
-                        tasks,
-                        "Which earlier KS utterances are being restated? (optional)",
-                        description="Select one or more strictly earlier substantive utterances.",
-                    )
-                    values["KS_prior_utterance_ids"] = st.multiselect(
-                        "Earlier KS utterances (optional)",
-                        list(context.earlier_ks_ids),
-                        default=values.get("KS_prior_utterance_ids") or [],
-                        format_func=labels.get,
-                        key=f"ids_KS_prior_utterance_ids_{uid}",
-                        label_visibility="collapsed",
-                    )
-                    if values["KS_prior_utterance_ids"]:
-                        answered.add("KS_prior_utterance_ids")
-            if values.get("KS_evidence_present") == 1:
-                evidence_definitions = {
-                    name: evidence_guide["Definition"] for name, evidence_guide in codebook.evidence_types.items()
-                }
-                task_intro(
-                    tasks,
-                    "Which evidence type or types are present?",
-                    codebook.fields["KS_evidence_type"],
-                    controlled_values=evidence_definitions,
-                    collapse_controlled_values=True,
-                )
-                values["KS_evidence_type"] = st.multiselect(
-                    "Evidence types present",
-                    sorted(codebook.evidence_types),
-                    default=values.get("KS_evidence_type") or [],
-                    key=f"ev_{uid}",
-                    label_visibility="collapsed",
-                )
-                if values["KS_evidence_type"]:
-                    answered.add("KS_evidence_type")
-            if values.get("KS_claim_target_specified") == 1 and (
-                values.get("KS_evidence_present") == 1 or values.get("KS_warrant_reasoning") == 1
-            ):
-                strength_options = {"0 — Unconvincing": 0, "1 — Partly convincing": 1, "2 — Convincing": 2}
-                current_strength = next(
-                    (label for label, score in strength_options.items() if score == values.get("KS_argument_strength")),
-                    None,
-                )
-                task_intro(tasks, "How strong is the argument?", codebook.fields["KS_argument_strength"])
-                strength_choice = st.radio(
-                    "Argument strength",
-                    list(strength_options),
-                    index=list(strength_options).index(current_strength) if current_strength else None,
-                    horizontal=True,
-                    key=f"argument_strength_{uid}",
-                    label_visibility="collapsed",
-                )
-                if strength_choice is not None:
-                    values["KS_argument_strength"] = strength_options[strength_choice]
-                    answered.add("KS_argument_strength")
-        if values.get("KI_present") == 1:
-            st.markdown("#### Knowledge integration details")
-            for name in ("KI_propose_edit", "KI_report_enacted_edit", "KI_solicit_feedback"):
-                set_binary(name)
-            if context.earlier_ki_attempt:
-                set_binary("KI_iterate")
-                feedback_options = {
-                    "No explicit feedback": None,
-                    "Accept": "accept",
-                    "Reject": "reject",
-                    "Mixed or conditional": "mixed_or_conditional",
-                }
-                reverse = {value: label for label, value in feedback_options.items()}
-                existing = (
-                    reverse.get(values.get("KI_explicit_feedback")) if "KI_explicit_feedback" in answered else None
-                )
-                task_intro(
-                    tasks,
-                    "What explicit feedback is given on the earlier proposed or enacted edit?",
-                    codebook.fields["KI_explicit_feedback"],
-                )
-                choice = st.radio(
-                    "Explicit feedback on an earlier proposed or enacted edit",
-                    list(feedback_options),
-                    index=list(feedback_options).index(existing) if existing else None,
-                    key=f"feedback_{uid}",
-                    label_visibility="collapsed",
-                )
-                if choice is not None:
-                    values["KI_explicit_feedback"] = feedback_options[choice]
-                    answered.add("KI_explicit_feedback")
-            if context.earlier_ks:
-                set_binary("KI_prior_knowledge")
-            if values.get("KI_prior_knowledge") == 1:
-                set_optional_utterance_links(
-                    "KI_prior_knowledge_utterance_ids",
-                    "Which earlier KS utterance(s) supplied knowledge to this KI utterance? (optional)",
-                    "Select strictly earlier KS utterances whose staked knowledge is integrated into the focal KI.",
-                    context.earlier_ks_ids,
-                )
-            if values.get("KI_iterate") == 1:
-                set_optional_utterance_links(
-                    "KI_iteration_utterance_ids",
-                    "Which earlier KI utterance(s) does this KI utterance iterate on? (optional)",
-                    "Select strictly earlier KI utterances whose proposed or enacted edits are developed here.",
-                    context.earlier_ki_ids,
-                )
-            if values.get("KI_explicit_feedback") in {"accept", "reject", "mixed_or_conditional"}:
-                set_optional_utterance_links(
-                    "KI_feedback_utterance_ids",
-                    "Which earlier KI utterance(s) receive explicit feedback from this KI utterance? (optional)",
-                    "Select strictly earlier KI utterances to which the focal feedback pertains.",
-                    context.earlier_ki_ids,
-                )
-        if not any(values.get(name) == 1 for name in BASE_BINARY):
-            st.info("No detailed fields apply. Complete confidence and review below.")
-
-        st.markdown("#### Confidence and review")
-        task_intro(tasks, "How confident are you in this utterance annotation?", description="Choose from 1 to 5.")
-        values["coder_confidence"] = st.radio(
-            "Coder confidence",
-            range(1, 6),
-            index=values.get("coder_confidence") - 1 if values.get("coder_confidence") in range(1, 6) else None,
-            horizontal=True,
-            key=f"confidence_{uid}",
-            label_visibility="collapsed",
-        )
-        if values["coder_confidence"] is not None:
-            answered.add("coder_confidence")
-        task_intro(tasks, "Should this utterance be flagged for review?", description="Choose No or Yes.")
-        values["review_flag"] = binary_control(
-            "Flag for review",
-            f"review_{uid}",
-            values.get("review_flag"),
-            label_visibility="collapsed",
-        )
-        if values["review_flag"] is not None:
-            answered.add("review_flag")
-        render_optional_note()
-        draft_col, submit_col = st.columns(2)
-        if draft_col.button("Save draft", use_container_width=True):
-            result = normalize_and_validate(
-                values, answered, context, set(codebook.evidence_types), config.low_confidence_threshold, False
-            )
-            event, _ = save_result(result, False)
-            st.success("Draft unchanged." if event == "unchanged" else "Draft saved.")
-        if submit_col.button("Submit and next", type="primary", use_container_width=True):
-            result = normalize_and_validate(
-                values, answered, context, set(codebook.evidence_types), config.low_confidence_threshold, True
-            )
-            if not result.valid:
-                for name, message in result.errors.items():
-                    st.error(f"{name}: {message}")
-            else:
-                save_result(result, True)
-                full = dataset.annotatable_in_dispute(did)
-                now_submitted = set(submitted) | {uid}
-                if set(full["utterance_id"].astype(str)) <= now_submitted:
-                    st.session_state.page = "dispute"
-                    st.session_state.dispute_id = did
-                    st.session_state.dispute_timer_start = time.monotonic()
-                    st.session_state.dispute_opened_at = opened_at()
-                else:
-                    nxt = full[~full["utterance_id"].astype(str).isin(now_submitted)].iloc[0]
-                    st.session_state.unit_id = str(nxt["utterance_id"])
-                st.rerun()
-        with st.expander("Revision history"):
-            history = [r for r in storage.rows("utterance_annotation_events", coder) if str(r["utterance_id"]) == uid]
-            for event in history:
-                st.write(f"Revision {event['revision_number']} · {event['event_type']} · {event['saved_at']}")
-
-    if utterance_navigation_request:
-        result = normalize_and_validate(
-            values,
-            answered,
-            context,
-            set(codebook.evidence_types),
-            config.low_confidence_threshold,
-            False,
-        )
-        event = "unchanged"
-        if answered or current is not None:
-            event, _ = save_result(result, False)
-        fresh_submitted = active_submitted_ids()
-        request_kind, request_value = utterance_navigation_request
-        if request_kind == "utterance":
-            destination = Destination("utterance", request_value, did)
-        elif request_kind == "utterance_choice":
-            target_row = frame[frame["utterance_id"].astype(str) == str(request_value)].iloc[0]
-            destination = Destination("utterance", request_value, str(target_row["dispute_id"]))
-        elif request_kind in {"dispute_choice", "dispute_decision"}:
-            destination = dispute_destination(dataset, str(request_value), fresh_submitted, completed_disputes)
+    if st.button("Submit and next", type="primary"):
+        result = normalize_and_validate(values, answered)
+        if not result.valid:
+            for name in result.errors:
+                st.error(f"Please answer: {PROMPTS.get(name, name)}")
         else:
-            destination = Destination("home")
-        if event != "unchanged":
-            st.session_state.navigation_notice = "Your current answers were saved as a draft before navigation."
-        apply_destination(destination)
-        st.rerun()
+            storage.save_utterance(
+                coder=coder,
+                utterance_id=uid,
+                dispute_id=did,
+                payload=result.payload,
+                answered_fields=answered & applicable_fields(result.payload),
+                submit=True,
+                schema_version=active_schema_id,
+                schema_hash=codebook.file_hash,
+                opened_at=st.session_state.utterance_opened_at,
+                elapsed_wall_seconds=time.monotonic() - st.session_state.utterance_timer_start,
+            )
+            turns = dataset.annotatable_in_dispute(did)
+            later = turns[turns["utterance_order"] > order]
+            pending = later[~later["utterance_id"].astype(str).isin(set(submitted) | {uid})]
+            if not pending.empty:
+                go("utterance", uid=str(pending.iloc[0]["utterance_id"]), did=did)
+            else:
+                go("dispute", did=did)
+            st.rerun()

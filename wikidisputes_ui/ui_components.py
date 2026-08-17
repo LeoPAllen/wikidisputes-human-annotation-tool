@@ -55,6 +55,14 @@ def inject_css() -> None:
         letter-spacing: .02em; margin: .7rem 0 -.2rem;
     }
     .controlled-value {margin: .35rem 0; padding-left: .55rem; border-left: 2px solid var(--primary-color);}
+    .st-key-utterance_reading_pane, .st-key-utterance_coding_pane {
+        scrollbar-gutter: stable;
+    }
+    @media (max-width: 768px) {
+        .st-key-utterance_reading_pane, .st-key-utterance_coding_pane {
+            height: auto !important; overflow-y: visible !important;
+        }
+    }
     </style>""",
         unsafe_allow_html=True,
     )

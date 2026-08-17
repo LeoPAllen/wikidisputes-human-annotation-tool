@@ -66,7 +66,7 @@ def synthetic_project(tmp_path: Path, source_rows):
         codebook_path=codebook,
         database_path=tmp_path / "db.sqlite3",
         export_directory=tmp_path / "exports",
-        schema_sheet="Core_Schema_SIMPLIFIED",
+        schema_sheet="Core_Schema",
         annotation_sheet="Gold_Annotation",
         schema_locked=False,
         low_confidence_threshold=2,

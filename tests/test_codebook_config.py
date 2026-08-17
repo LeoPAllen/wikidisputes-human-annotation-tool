@@ -1,37 +1,37 @@
-from wikidisputes_ui.codebook import EXPECTED_LABELS, file_fingerprint, load_codebook, schema_id
+import pandas as pd
+import pytest
+
+from wikidisputes_ui.codebook import EXPECTED_DISPUTE_OBJECTS, EXPECTED_LABELS, load_codebook
 from wikidisputes_ui.config import load_config
 
 
-def test_authoritative_codebook_and_controlled_values():
+def test_authoritative_one_sheet_codebook():
     book = load_codebook("data/source/codebook.xlsx")
-    assert EXPECTED_LABELS == set(book.fields)
-    assert "external_source_or_quote" in book.evidence_types
-    assert "wording_or_framing" in book.dispute_objects
-    assert "0,1,2" in book.fields["KS_argument_strength"].indicator.replace(" ", "")
-    assert {"KS_warrant_reasoning", "KI_solicit_feedback", "KI_iterate"} <= set(book.fields)
-    simplified_text = " ".join(
-        [
-            value
-            for field in book.fields.values()
-            for value in (field.label, field.definition, field.rule, field.example)
-        ]
-    )
-    assert "candidate" not in simplified_text.lower()
-    assert len(book.file_hash) == 64
-    assert schema_id(book.file_hash) == f"schema-{book.file_hash[:12]}"
+    assert tuple(book.fields) == EXPECTED_LABELS
+    assert tuple(book.dispute_objects) == EXPECTED_DISPUTE_OBJECTS
+    assert "binary {0,1}" in book.fields["KI_compromise_position"].indicator
+    assert book.fields["KS_restaking"].example_provenance
 
 
-def test_config_uses_one_annotation_sheet(tmp_path):
+def test_missing_duplicate_and_unexpected_labels_are_rejected(tmp_path):
+    source = pd.read_excel("data/source/codebook.xlsx", sheet_name="Core_Schema")
+    for name, frame in {
+        "missing": source.iloc[:-1],
+        "duplicate": pd.concat([source, source.iloc[[0]]], ignore_index=True),
+        "unexpected": source.assign(Label=[*source.Label.iloc[:-1], "unexpected"]),
+    }.items():
+        path = tmp_path / f"{name}.xlsx"
+        with pd.ExcelWriter(path, engine="openpyxl") as writer:
+            frame.to_excel(writer, sheet_name="Core_Schema", index=False)
+        with pytest.raises(ValueError):
+            load_codebook(path)
+
+
+def test_config_uses_core_schema(tmp_path):
     path = tmp_path / "project.toml"
     path.write_text(
-        """schema_sheet="Core_Schema_SIMPLIFIED"\nannotation_sheet="Gold_Annotation"\nschema_locked=false\nlow_confidence_threshold=2\ngold_path="g.xlsx"\ncodebook_path="c.xlsx"\ndatabase_path="d.sqlite"\nexport_directory="exports"\n"""
+        'schema_sheet="Core_Schema"\nannotation_sheet="Gold_Annotation"\nschema_locked=false\n'
+        'low_confidence_threshold=2\ngold_path="g.xlsx"\ncodebook_path="c.xlsx"\n'
+        'database_path="d.sqlite"\nexport_directory="exports"\n'
     )
-    assert load_config(path).annotation_sheet == "Gold_Annotation"
-
-
-def test_file_fingerprint_changes_with_authoritative_input(tmp_path):
-    path = tmp_path / "codebook.xlsx"
-    path.write_bytes(b"first")
-    first = file_fingerprint(path)
-    path.write_bytes(b"second")
-    assert file_fingerprint(path) != first
+    assert load_config(path).schema_sheet == "Core_Schema"

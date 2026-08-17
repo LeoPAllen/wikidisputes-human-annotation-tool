@@ -1,10 +1,11 @@
 # WikiDisputes human annotation tool
 
-A private, local Streamlit workflow for coding the single `Gold_Annotation` worksheet in `data/source/gold_input.xlsx`. All 438 source rows are retained; 404 `utterance` rows are annotatable and 34 `context` rows are display-only conversation headings.
+A private, local Streamlit workflow for coding substantive utterances from the `Gold_Annotation` worksheet in
+`data/source/gold_input.xlsx`. Context rows are display-only and source order is preserved.
 
 ## Setup and run
 
-Python 3.11+ is required. On macOS/Linux:
+Python 3.11+ is required:
 
 ```bash
 python3.11 -m venv .venv
@@ -13,42 +14,37 @@ python3.11 -m venv .venv
 .venv/bin/streamlit run app.py
 ```
 
-On Windows PowerShell, use `.venv\Scripts\python.exe`, `.venv\Scripts\pip.exe`, and `.venv\Scripts\streamlit.exe` in the equivalent commands.
+The first screen requests a pseudonymous coder ID. SQLite projections and append-only events are coder-isolated. The
+sidebar exports only the active coder and active codebook hash.
 
-The first screen asks for a pseudonymous coder ID. It identifies local records; it is not authentication. Give each coder a separate repository/database copy, or at minimum a distinct `database_path`. Use the sidebar to export the active coder's workbook or download a consistent SQLite backup.
+## Schema and workflow
 
-## Data and schema
+`data/source/codebook.xlsx` has exactly one authoritative worksheet, `Core_Schema`. Definitions, coding rules,
+examples, provenance, and dispute-object option descriptions are read from it. The whole-file SHA-256 identifies the
+active schema.
 
-`config/project.toml` names `annotation_sheet = "Gold_Annotation"` and `Core_Schema_SIMPLIFIED`. Do not edit either source XLSX. The simplified schema and its controlled-value sheets are authoritative.
+Each opened dispute uses one continuous utterance screen. Five always-applicable questions have explicit No/Yes
+answers and no default. Answering Yes to KS reveals four inline KS questions; answering Yes to KI independently
+reveals two inline KI questions. `KS_restaking` is entered by the coder from the visible earlier discussion and is not
+derived. `KI_compromise_position` is binary. Changing either parent to No hides its children; normalized storage uses
+null for those inapplicable answers.
 
-Codebook evolution is tracked automatically by the SHA-256 of the complete codebook. The active schema label is derived from that hash; changing the workbook reloads validation and starts a separate annotation projection without a manual version edit. `schema_locked` is an optional administrative freeze and is normally `false` during annotation.
+Each utterance has exactly one required confidence response (1–5), one required review flag, and one optional comment.
+After every substantive utterance in a dispute is submitted, the workflow shows only the final
+`C_primary_dispute_object` decision. Its eight values and descriptions are parsed from the codebook coding rule.
 
-## Research workflow
+The Excel export contains submitted substantive rows only. It propagates the dispute object to those rows, emits
+inapplicable nulls as blank cells, uses nullable integers for binary/audit values, excludes legacy gold annotations and
+obsolete schema fields, and retains source identifiers plus audit provenance. Historical SQLite event payloads remain
+unchanged and available in database backups.
 
-Before distributing a study copy, run validation and all checks below. Back up the SQLite file regularly. The Excel export is a flat, schema-locked `Gold_Annotations` sheet with one row per submitted focal utterance for the active coder and codebook hash. Its annotation columns follow the active simplified schema; drafts, context-only rows, obsolete schema fields, other coders, and event history are excluded. The SQLite backup retains mutable projections and append-only event history.
-
-Each utterance is coded in two local stages. The first records five KS, KI, and control gateway judgments as a durable draft. The second shows only details and evidence that apply, followed by confidence and review. Every visible coding task has deterministic numbering and presents its definition and expandable guidance before the answer control. Reopening a draft with all gateways answered resumes at the detail stage; the same utterance timer and append-only event history are retained.
-
-Optional free-text evidence-span fields are currently omitted from the coding workflow because their interaction was not reliable enough for annotation use. It may make sense to add KI or control evidence spans back later after their intended capture and persistence behavior is redesigned and tested.
-
-KI relationship links are exported separately by meaning: `KI_prior_knowledge_utterance_ids` identifies earlier KS incorporated into the focal KI, `KI_iteration_utterance_ids` identifies earlier KI developed by the focal turn, and `KI_feedback_utterance_ids` identifies earlier KI receiving the focal turn's explicit feedback. The former selector offers only qualifying earlier KS turns; the latter two offer only qualifying earlier KI turns. The former combined `KI_upstream_utterance_ids` is retained only in historical SQLite events and is not automatically reassigned because its relationship type is ambiguous.
-
-The navigation panel can return to the immediately previous substantive utterance, the workspace, or another dispute. Opening an incomplete dispute chooses its earliest unsubmitted utterance by default; an annotator can instead select a specific utterance within that dispute for direct navigation or review. Completed disputes remain available for utterance and dispute-decision review. Meaningful utterance edits are normalized and saved as a non-submitted draft before navigation; unchanged screens create no event. Because dispute decisions do not have drafts, navigation with unsaved dispute changes requires explicit discard confirmation.
-
-The reading pane shows the source section heading once, the focal utterance, and strictly earlier substantive turns. Source text is escaped and rendered with its original whitespace. Raw IDs remain available in the collapsed source details rather than dominating the reading surface.
-
-Coder-facing hiding of `escalated`, outcomes, administrative sampling fields, `dispute_resolution_url`, `Dispute_Rationales`, and `Validation_Audit` is UI blinding, not filesystem access control. The master XLSX still contains administrative data. Hard blinding requires distributing a separately sanitized workbook/repository.
-
-## Verification and troubleshooting
+## Verification
 
 ```bash
+.venv/bin/python -m wikidisputes_ui.validation
 .venv/bin/pytest -q
 .venv/bin/ruff check .
 .venv/bin/ruff format --check .
-.venv/bin/python -m wikidisputes_ui.validation
 ```
 
-- Missing sheet or columns: restore the authoritative `Gold_Annotation` worksheet; do not repair rows in application code.
-- Codebook change: refresh the app; its hash-derived schema identity and cache key update automatically.
-- Legacy database collision: migration stops before changes and identifies the colliding coder/unit records. Reconcile or archive them in a copy, then retry.
-- Timing is best-effort wall time for an opened screen; it is not active-attention tracking.
+Never edit either workbook under `data/source/`. Input QC reports source defects rather than repairing source rows.

@@ -1,13 +1,28 @@
 # Architecture and versioning
 
-`config` selects the single `Gold_Annotation` worksheet and resolves local paths. Validation reads that sheet and the authoritative `Core_Schema_SIMPLIFIED` codebook before annotation can start. Ingestion retains every source row in its original order while exposing separate views for all rows, context headings, and substantive annotatable turns.
+Configuration selects `Gold_Annotation` as the source-data worksheet and `Core_Schema` as the sole codebook worksheet.
+Ingestion retains every source row in workbook order while exposing context and substantive views. Legacy annotation
+columns in the source workbook are neither UI state nor export metadata.
 
-For focal order `t`, the UI may display only same-dispute rows with `utterance_order < t`. Only earlier substantive turns contribute to applicability or selectable evidence IDs. Context headings remain display-only and never enter progress, readiness, storage, review, or utterance annotation exports.
+For focal utterance order `t`, display context is strictly the same dispute's rows with lower `utterance_order`, during
+initial coding and revision. Context rows are never annotated. Applicability depends only on the focal answers:
 
-SQLite stores coder-isolated current projections and append-only events. Current keys are `(coder_id, utterance_id)` and `(coder_id, dispute_id)`. A one-time transactional migration backs up older databases, checks unified-key collisions, and rebuilds the four annotation tables without the obsolete column. Collision detection aborts before any database change.
+- five binary parent/control fields always apply;
+- four KS children apply when `KS_present=1`;
+- two KI children apply when `KI_present=1`;
+- confidence, review flag, and one optional comment apply to every utterance.
 
-The utterance screen derives its two-stage state from the existing current projection for the active codebook hash. Completing the five gateway fields saves a normal draft and advances to applicable details without resetting `opened_at`. A draft or submitted record with all five gateways answered opens directly in the detail stage. Returning to the gateway stage does not mutate child answers; applying a parent change normalizes newly inapplicable children to null through the same model used at submission. No workflow table or storage schema is involved.
+The model clears hidden children to null and removes them from `answered_fields`. KS and KI are independent.
+`KS_restaking` is a direct coder judgment based on visible prior discussion. `KI_compromise_position` is binary.
 
-Applicability is model-owned. In particular, `KI_explicit_feedback` applies only when KI is present and an earlier KI attempt exists. Its explicitly answered “No explicit feedback” state is represented by a null payload plus membership in `answered_fields`; when the field is inapplicable, both its payload and answered-state membership are removed.
+Only when all substantive utterances in a dispute are submitted may the UI store the final dispute payload. That
+payload and its `answered_fields` contain only `C_primary_dispute_object`; the allowed values and explanations are
+parsed from bullets in its authoritative coding rule.
 
-Codebook evolution is independent of the dataset. The entire codebook file's SHA-256 is the canonical schema identity, and a compact label such as `schema-ea0743dd3933` is derived from it automatically for display and the legacy-named `schema_version` storage column. The codebook and gold-file fingerprints are Streamlit resource-cache keys, so changing either file forces authoritative parsing and validation to reload without a manual version edit or server restart. Progress, contextual dependencies, exports, and editable projections match the active hash only. Each Excel export contains one source-aligned `Gold_Annotations` sheet, carries the active ID and full hash on every row, and excludes drafts, earlier-schema projections, and mutable event history. The SQLite database and backup retain projections and append-only events across schemas. `schema_locked` is an optional administrative freeze, not a prerequisite for annotation.
+SQLite current tables are coder-isolated projections; event tables are append-only. No schema migration is needed for
+the simplified fields because payloads are JSON. Each write retains schema identity, UTC timestamps, elapsed wall time,
+revision number, coder, and application version. Older payloads remain intact.
+
+The complete codebook file hash is the canonical schema identity. Progress and exports select the active hash. Excel
+exports have deterministic columns, include only submitted substantive rows, propagate the final dispute object, map
+SQL/JSON null to blank cells, and exclude obsolete and legacy gold annotation fields.

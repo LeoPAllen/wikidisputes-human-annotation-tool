@@ -15,17 +15,13 @@ from .storage import Storage
 
 INTEGER_COLUMNS = {
     "KS_present",
-    "KS_claim_target_specified",
-    "KS_evidence_present",
-    "KS_warrant_reasoning",
-    "KS_argument_strength",
-    "KS_unelaborated_restaking",
+    "KS_claim_present",
+    "KS_evidence_reference",
+    "KS_reasoning",
+    "KS_restaking",
     "KI_present",
-    "KI_propose_edit",
-    "KI_report_enacted_edit",
     "KI_solicit_feedback",
-    "KI_iterate",
-    "KI_prior_knowledge",
+    "KI_compromise_position",
     "C_off_topic_shift",
     "C_interpersonal_attack_or_disrespect",
     "C_formal_governance_action",
@@ -35,10 +31,6 @@ INTEGER_COLUMNS = {
 }
 
 AUDIT_EXPORT_COLUMNS = (
-    "KS_prior_utterance_ids",
-    "KI_prior_knowledge_utterance_ids",
-    "KI_iteration_utterance_ids",
-    "KI_feedback_utterance_ids",
     "coder_confidence",
     "review_flag",
     "coder_notes",

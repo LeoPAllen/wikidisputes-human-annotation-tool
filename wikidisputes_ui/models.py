@@ -1,4 +1,4 @@
-"""Annotation applicability and submission validation."""
+"""Simplified annotation applicability and submission validation."""
 
 from __future__ import annotations
 
@@ -12,48 +12,14 @@ BASE_BINARY = (
     "C_interpersonal_attack_or_disrespect",
     "C_formal_governance_action",
 )
-KS_FIELDS = ("KS_claim_target_specified", "KS_evidence_present", "KS_warrant_reasoning")
-KI_FIELDS = ("KI_propose_edit", "KI_report_enacted_edit", "KI_solicit_feedback")
-ALL_LABELS = set(
-    BASE_BINARY
-    + KS_FIELDS
-    + KI_FIELDS
-    + (
-        "KS_evidence_type",
-        "KS_argument_strength",
-        "KS_unelaborated_restaking",
-        "KI_iterate",
-        "KI_explicit_feedback",
-        "KI_prior_knowledge",
-    )
-)
-AUDIT_FIELDS = {
-    "KS_evidence_span",
-    "KS_prior_utterance_ids",
-    "KI_prior_knowledge_utterance_ids",
-    "KI_iteration_utterance_ids",
-    "KI_feedback_utterance_ids",
-    "coder_confidence",
-    "short_justification",
-    "review_flag",
-    "coder_notes",
-}
-REMOVED_FIELDS = {
-    "KS_evidence_span",
-    "KI_evidence_span",
-    "KI_upstream_utterance_ids",
-    "control_evidence_span",
-}
-ALL_FIELDS = ALL_LABELS | AUDIT_FIELDS | REMOVED_FIELDS
+KS_FIELDS = ("KS_claim_present", "KS_evidence_reference", "KS_reasoning", "KS_restaking")
+KI_FIELDS = ("KI_solicit_feedback", "KI_compromise_position")
+ANNOTATION_FIELDS = BASE_BINARY + KS_FIELDS + KI_FIELDS + ("coder_confidence", "review_flag", "coder_notes")
 
 
 @dataclass(frozen=True)
 class ContextState:
-    earlier_ids: tuple[str, ...] = ()
-    earlier_ks: bool = False
-    earlier_ki_attempt: bool = False
-    earlier_ks_ids: tuple[str, ...] = ()
-    earlier_ki_ids: tuple[str, ...] = ()
+    """Retained as a compatibility marker; applicability no longer depends on prior coding."""
 
 
 @dataclass
@@ -66,112 +32,44 @@ class ValidationResult:
         return not self.errors
 
 
-def applicable_fields(values: dict[str, Any], context: ContextState, low_threshold: int = 2) -> set[str]:
-    applicable = set(BASE_BINARY) | {
-        "coder_confidence",
-        "review_flag",
-        "coder_notes",
-    }
+def applicable_fields(values: dict[str, Any], context: ContextState | None = None, low_threshold: int = 2) -> set[str]:
+    del context, low_threshold
+    applicable = set(BASE_BINARY) | {"coder_confidence", "review_flag", "coder_notes"}
     if values.get("KS_present") == 1:
         applicable.update(KS_FIELDS)
-        if context.earlier_ks:
-            applicable.add("KS_unelaborated_restaking")
-            if values.get("KS_unelaborated_restaking") == 1:
-                applicable.add("KS_prior_utterance_ids")
-        if values.get("KS_evidence_present") == 1:
-            applicable.add("KS_evidence_type")
-        if values.get("KS_claim_target_specified") == 1 and (
-            values.get("KS_evidence_present") == 1 or values.get("KS_warrant_reasoning") == 1
-        ):
-            applicable.add("KS_argument_strength")
     if values.get("KI_present") == 1:
         applicable.update(KI_FIELDS)
-        if context.earlier_ki_attempt:
-            applicable.update(("KI_iterate", "KI_explicit_feedback"))
-        if context.earlier_ks:
-            applicable.add("KI_prior_knowledge")
-        if values.get("KI_prior_knowledge") == 1:
-            applicable.add("KI_prior_knowledge_utterance_ids")
-        if values.get("KI_iterate") == 1:
-            applicable.add("KI_iteration_utterance_ids")
-        if values.get("KI_explicit_feedback") in {"accept", "reject", "mixed_or_conditional"}:
-            applicable.add("KI_feedback_utterance_ids")
     return applicable
 
 
 def normalize_and_validate(
     values: dict[str, Any],
     answered_fields: set[str],
-    context: ContextState,
-    evidence_types: set[str],
+    context: ContextState | None = None,
+    evidence_types: set[str] | None = None,
     low_threshold: int = 2,
     require_complete: bool = True,
 ) -> ValidationResult:
-    payload = dict(values)
+    del evidence_types
+    applicable = applicable_fields(values, context, low_threshold)
+    payload = {name: values.get(name) if name in applicable else None for name in ANNOTATION_FIELDS}
+    answered_fields.intersection_update(applicable)
     errors: dict[str, str] = {}
-    applicable = applicable_fields(payload, context, low_threshold)
-    for label in ALL_FIELDS - applicable:
-        payload[label] = None
     required = set(BASE_BINARY) | {"coder_confidence", "review_flag"}
-    if payload.get("KS_present") == 1:
+    if payload["KS_present"] == 1:
         required.update(KS_FIELDS)
-        if context.earlier_ks:
-            required.add("KS_unelaborated_restaking")
-        if payload.get("KS_evidence_present") == 1:
-            required.add("KS_evidence_type")
-        if payload.get("KS_claim_target_specified") == 1 and (
-            payload.get("KS_evidence_present") == 1 or payload.get("KS_warrant_reasoning") == 1
-        ):
-            required.add("KS_argument_strength")
-    if payload.get("KI_present") == 1:
+    if payload["KI_present"] == 1:
         required.update(KI_FIELDS)
-        if context.earlier_ki_attempt:
-            required.add("KI_iterate")
-        if context.earlier_ks:
-            required.add("KI_prior_knowledge")
-    if payload.get("KI_present") == 1 and context.earlier_ki_attempt:
-        required.add("KI_explicit_feedback")
-    feedback = payload.get("KI_explicit_feedback")
     if require_complete:
         for name in required:
-            if name not in answered_fields or (payload.get(name) in (None, "", []) and name != "KI_explicit_feedback"):
+            if name not in answered_fields or payload.get(name) is None:
                 errors[name] = "An explicit response is required."
-    for name in (
-        BASE_BINARY
-        + KS_FIELDS
-        + KI_FIELDS
-        + (
-            "KS_unelaborated_restaking",
-            "KI_iterate",
-            "KI_prior_knowledge",
-        )
-    ):
+    for name in BASE_BINARY + KS_FIELDS + KI_FIELDS + ("review_flag",):
         if payload.get(name) is not None and payload[name] not in (0, 1):
             errors[name] = "Choose No or Yes."
-    if payload.get("KS_argument_strength") is not None and payload["KS_argument_strength"] not in range(3):
-        errors["KS_argument_strength"] = "Choose 0, 1, or 2."
-    for name in ("coder_confidence",):
-        if payload.get(name) is not None and payload[name] not in range(1, 6):
-            errors[name] = "Choose an integer from 1 through 5."
-    selected = payload.get("KS_evidence_type")
-    if selected is not None:
-        unknown = set(selected) - evidence_types
-        if unknown:
-            errors["KS_evidence_type"] = f"Unknown evidence type(s): {', '.join(sorted(unknown))}"
-        payload["KS_evidence_type"] = sorted(set(selected))
-    link_targets = {
-        "KS_prior_utterance_ids": set(context.earlier_ks_ids),
-        "KI_prior_knowledge_utterance_ids": set(context.earlier_ks_ids),
-        "KI_iteration_utterance_ids": set(context.earlier_ki_ids),
-        "KI_feedback_utterance_ids": set(context.earlier_ki_ids),
-    }
-    for field_name, allowed_ids in link_targets.items():
-        ids = payload.get(field_name)
-        if ids:
-            invalid = set(ids) - allowed_ids
-            if invalid:
-                errors[field_name] = f"Only qualifying earlier utterance IDs are allowed: {', '.join(sorted(invalid))}"
-            payload[field_name] = sorted(set(ids))
-    if feedback not in (None, "accept", "reject", "mixed_or_conditional"):
-        errors["KI_explicit_feedback"] = "Choose a canonical feedback value."
+    confidence = payload.get("coder_confidence")
+    if confidence is not None and (type(confidence) is not int or confidence not in range(1, 6)):
+        errors["coder_confidence"] = "Choose an integer from 1 through 5."
+    note = payload.get("coder_notes")
+    payload["coder_notes"] = note.strip() if isinstance(note, str) and note.strip() else None
     return ValidationResult(payload, errors)

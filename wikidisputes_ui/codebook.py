@@ -1,12 +1,47 @@
-"""Authoritative codebook parser."""
+"""Authoritative one-sheet codebook parser."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
+import re
 
 import pandas as pd
+
+CODEBOOK_COLUMNS = (
+    "Family",
+    "Label",
+    "Indicator",
+    "Definition",
+    "Coding rule",
+    "Example (raw text + explanation)",
+    "Example provenance",
+)
+EXPECTED_LABELS = (
+    "KS_present",
+    "KS_claim_present",
+    "KS_evidence_reference",
+    "KS_reasoning",
+    "KS_restaking",
+    "KI_present",
+    "KI_solicit_feedback",
+    "KI_compromise_position",
+    "C_off_topic_shift",
+    "C_interpersonal_attack_or_disrespect",
+    "C_formal_governance_action",
+    "C_primary_dispute_object",
+)
+EXPECTED_DISPUTE_OBJECTS = (
+    "wording_or_framing",
+    "source_or_evidence",
+    "factual_accuracy",
+    "neutrality_or_balance",
+    "scope_relevance_or_due_weight",
+    "article_structure_or_location",
+    "visual_or_media_content",
+    "mixed_or_unclear",
+)
 
 
 @dataclass(frozen=True)
@@ -17,37 +52,15 @@ class FieldGuide:
     definition: str
     rule: str
     example: str
+    example_provenance: str = ""
 
 
 @dataclass(frozen=True)
 class Codebook:
     fields: dict[str, FieldGuide]
-    evidence_types: dict[str, dict[str, str]]
-    dispute_objects: dict[str, dict[str, str]]
+    dispute_objects: dict[str, str]
     file_hash: str
     source_filename: str
-
-
-EXPECTED_LABELS = {
-    "KS_present",
-    "KS_claim_target_specified",
-    "KS_evidence_present",
-    "KS_evidence_type",
-    "KS_warrant_reasoning",
-    "KS_argument_strength",
-    "KS_unelaborated_restaking",
-    "KI_present",
-    "KI_propose_edit",
-    "KI_report_enacted_edit",
-    "KI_solicit_feedback",
-    "KI_iterate",
-    "KI_explicit_feedback",
-    "KI_prior_knowledge",
-    "C_off_topic_shift",
-    "C_interpersonal_attack_or_disrespect",
-    "C_formal_governance_action",
-    "C_primary_dispute_object",
-}
 
 
 def _clean(value: object) -> str:
@@ -55,24 +68,48 @@ def _clean(value: object) -> str:
 
 
 def file_fingerprint(path: str | Path) -> str:
-    """Return the canonical identity of an input file."""
     return sha256(Path(path).read_bytes()).hexdigest()
 
 
 def schema_id(file_hash: str) -> str:
-    """Return a compact display/storage label derived from the canonical hash."""
     return f"schema-{file_hash[:12]}"
 
 
-def load_codebook(path: str | Path, schema_sheet: str = "Core_Schema_SIMPLIFIED") -> Codebook:
+def _parse_dispute_objects(rule: str) -> dict[str, str]:
+    parsed: dict[str, str] = {}
+    pattern = re.compile(r"^\s*[•*-]\s*([a-z][a-z0-9_]*)\s*[—–-]\s*(.+?)\s*$")
+    for line in rule.splitlines():
+        match = pattern.match(line)
+        if match:
+            parsed[match.group(1)] = match.group(2).rstrip(".")
+    if tuple(parsed) != EXPECTED_DISPUTE_OBJECTS:
+        raise ValueError(
+            "C_primary_dispute_object coding rule must define exactly these values in order: "
+            + ", ".join(EXPECTED_DISPUTE_OBJECTS)
+        )
+    return parsed
+
+
+def load_codebook(path: str | Path, schema_sheet: str = "Core_Schema") -> Codebook:
     path = Path(path)
+    excel = pd.ExcelFile(path)
+    if excel.sheet_names != [schema_sheet]:
+        raise ValueError(
+            f"Codebook must contain exactly one worksheet named {schema_sheet!r}; found {excel.sheet_names!r}."
+        )
     schema = pd.read_excel(path, sheet_name=schema_sheet, dtype=object)
-    evidence = pd.read_excel(path, sheet_name="Evidence_Types", dtype=object)
-    objects = pd.read_excel(path, sheet_name="Primary_Dispute_Objects", dtype=object)
-    example_column = "Example (raw text + explanation)"
-    if example_column not in schema.columns:
-        example_column = "Real example"
-    fields = {}
+    missing = [column for column in CODEBOOK_COLUMNS if column not in schema.columns]
+    if missing:
+        raise ValueError(f"{schema_sheet}: missing columns: {', '.join(missing)}")
+    labels = [_clean(value) for value in schema["Label"]]
+    if any(not label for label in labels):
+        raise ValueError("Codebook labels must be nonblank.")
+    duplicates = sorted({label for label in labels if labels.count(label) > 1})
+    if duplicates:
+        raise ValueError(f"Duplicate codebook labels: {', '.join(duplicates)}")
+    if tuple(labels) != EXPECTED_LABELS:
+        raise ValueError("Codebook labels must exactly match the supported label set and display order.")
+    fields: dict[str, FieldGuide] = {}
     for _, row in schema.iterrows():
         label = _clean(row["Label"])
         fields[label] = FieldGuide(
@@ -81,16 +118,8 @@ def load_codebook(path: str | Path, schema_sheet: str = "Core_Schema_SIMPLIFIED"
             _clean(row["Indicator"]),
             _clean(row["Definition"]),
             _clean(row["Coding rule"]),
-            _clean(row[example_column]),
+            _clean(row["Example (raw text + explanation)"]),
+            _clean(row["Example provenance"]),
         )
-    evidence_types = {
-        _clean(row["Evidence type"]): {str(k): _clean(v) for k, v in row.items()}
-        for _, row in evidence.iterrows()
-        if _clean(row["Evidence type"])
-    }
-    dispute_objects = {
-        _clean(row["Primary dispute object"]): {str(k): _clean(v) for k, v in row.items()}
-        for _, row in objects.iterrows()
-        if _clean(row["Primary dispute object"])
-    }
-    return Codebook(fields, evidence_types, dispute_objects, file_fingerprint(path), path.name)
+    objects = _parse_dispute_objects(fields["C_primary_dispute_object"].rule)
+    return Codebook(fields, objects, file_fingerprint(path), path.name)
