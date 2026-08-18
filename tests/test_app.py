@@ -40,7 +40,7 @@ def answer_all(app, ks=0, ki=0):
             "Does it repeat an earlier claim or objection without adding evidence or reasoning?",
         ):
             radio(app, label).set_value(0)
-    radio(app, "Does this utterance propose, report, or refine an article edit?").set_value(ki)
+    radio(app, "Does this utterance coordiante, propose, report, or refine an article edit?").set_value(ki)
     app = app.run()
     if ki:
         radio(app, "Does it ask others to assess, revise, or accept that edit?").set_value(0)
@@ -61,7 +61,7 @@ def test_inline_workflow_has_no_stages_and_conditional_children(monkeypatch, syn
     labels = {item.label for item in app.radio}
     assert "Does it make a substantive claim?" not in labels
     radio(app, "Does this utterance state or challenge knowledge about the article or dispute?").set_value(1)
-    radio(app, "Does this utterance propose, report, or refine an article edit?").set_value(1)
+    radio(app, "Does this utterance coordiante, propose, report, or refine an article edit?").set_value(1)
     app = app.run()
     labels = {item.label for item in app.radio}
     assert len(set(KS_CHILD_LABELS) & labels) == 4
@@ -152,6 +152,17 @@ def test_annotator_remarks_are_isolated_by_utterance(monkeypatch, synthetic_proj
     assert radio(app, "How confident are you in this utterance annotation?").value is None
     assert radio(app, "Flag this utterance for review?").value is None
     assert next(item for item in app.text_area if item.label == "Optional comment").value == ""
+
+
+def test_earlier_conversation_shows_prior_ks_and_ki_labels(monkeypatch, synthetic_project):
+    app = enter(configured(monkeypatch, synthetic_project))
+    app = answer_all(app, ks=1, ki=0)
+    app = next(button for button in app.button if button.label == "Submit and next").click().run()
+
+    rendered = " ".join(str(item.value) for item in app.markdown)
+    assert '<span class="badge">KS</span>' in rendered
+    assert '<span class="badge">KI</span>' not in rendered
+    assert "Context — not annotated" in rendered
 
 
 def test_dispute_object_blocked_before_all_submissions(monkeypatch, synthetic_project):

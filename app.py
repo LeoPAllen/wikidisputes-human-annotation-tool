@@ -294,6 +294,18 @@ with reading.container(height=650, border=False, key="utterance_reading_pane"):
         badges = (f"#{int(turn['utterance_order'])}",)
         if turn["utterance_role"] == "context":
             badges += ("Context — not annotated",)
+        else:
+            prior_annotation = submitted.get(str(turn["utterance_id"]))
+            if prior_annotation is None:
+                badges += ("Not annotated",)
+            else:
+                prior_payload = json.loads(prior_annotation["payload_json"])
+                classifications = tuple(
+                    label
+                    for label, field in (("KS", "KS_present"), ("KI", "KI_present"))
+                    if prior_payload.get(field) == 1
+                )
+                badges += classifications or ("Neither KS nor KI",)
         prior_comment(turn, badges)
 
 PROMPTS = {
@@ -302,7 +314,7 @@ PROMPTS = {
     "KS_evidence_reference": "Does it directly refer to evidence or another supporting basis?",
     "KS_reasoning": "Does it connect evidence or a premise to a conclusion?",
     "KS_restaking": "Does it repeat an earlier claim or objection without adding evidence or reasoning?",
-    "KI_present": "Does this utterance propose, report, or refine an article edit?",
+    "KI_present": "Does this utterance coordiante, propose, report, or refine an article edit?",
     "KI_solicit_feedback": "Does it ask others to assess, revise, or accept that edit?",
     "KI_compromise_position": "Does the edit visibly accommodate at least two positions or concerns?",
     "C_off_topic_shift": "Does this shift away from the article dispute?",
