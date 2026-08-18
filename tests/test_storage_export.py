@@ -37,6 +37,52 @@ def test_schema_drift_events_revisions_and_utc(tmp_path):
     assert all(row["saved_at"].endswith("Z") and row["elapsed_wall_seconds"] >= 0 for row in events)
 
 
+def test_identical_answers_are_revised_when_schema_changes(tmp_path):
+    storage = Storage(tmp_path / "db.sqlite")
+    payload = {"KS_present": 0, "KI_present": 0, "coder_confidence": 3, "review_flag": 0}
+    assert save(storage, payload=payload) == ("submit", 1)
+
+    utterance_event = storage.save_utterance(
+        coder="coder_1",
+        utterance_id="u1",
+        dispute_id="D1",
+        payload=payload,
+        answered_fields={"KS_present"},
+        submit=True,
+        schema_version="1.0.0",
+        schema_hash="new-schema",
+        opened_at="2020-01-02T00:00:00Z",
+        elapsed_wall_seconds=1,
+    )
+    assert utterance_event == ("revise", 2)
+    assert storage.current_utterance("coder_1", "u1")["schema_hash"] == "new-schema"
+
+    dispute_payload = {"C_primary_dispute_object": "wording_or_framing"}
+    storage.save_dispute(
+        coder="coder_1",
+        dispute_id="D1",
+        payload=dispute_payload,
+        answered_fields={"C_primary_dispute_object"},
+        schema_version="0.9.7",
+        schema_hash="abc",
+        opened_at="2020-01-01T00:00:00Z",
+        elapsed_wall_seconds=1,
+    )
+    dispute_event = storage.save_dispute(
+        coder="coder_1",
+        dispute_id="D1",
+        payload=dispute_payload,
+        answered_fields={"C_primary_dispute_object"},
+        schema_version="1.0.0",
+        schema_hash="new-schema",
+        opened_at="2020-01-02T00:00:00Z",
+        elapsed_wall_seconds=1,
+    )
+    assert dispute_event == ("revise", 2)
+    current_dispute = storage.rows("dispute_annotations", "coder_1")[0]
+    assert current_dispute["schema_hash"] == "new-schema"
+
+
 def test_revision_draft_is_not_exported_as_submitted(tmp_path):
     storage = Storage(tmp_path / "db.sqlite")
     save(storage)

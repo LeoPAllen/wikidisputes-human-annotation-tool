@@ -213,13 +213,16 @@ class Storage:
         answered_json = json.dumps(sorted(answered_fields))
         with self.connect() as db:
             current = db.execute(
-                "SELECT status,payload_json,answered_fields_json,revision_number FROM utterance_annotations WHERE coder_id=? AND utterance_id=?",
+                """SELECT status,payload_json,answered_fields_json,revision_number,schema_version,schema_hash
+                FROM utterance_annotations WHERE coder_id=? AND utterance_id=?""",
                 (coder, utterance_id),
             ).fetchone()
             if (
                 current
                 and current[1] == payload_json
                 and current[2] == answered_json
+                and current[4] == schema_version
+                and current[5] == schema_hash
                 and (not submit or current[0] == "submitted")
             ):
                 return "unchanged", int(current[3])
@@ -286,10 +289,11 @@ class Storage:
         data = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         with self.connect() as db:
             current = db.execute(
-                "SELECT payload_json,revision_number FROM dispute_annotations WHERE coder_id=? AND dispute_id=?",
+                """SELECT payload_json,revision_number,schema_version,schema_hash FROM dispute_annotations
+                WHERE coder_id=? AND dispute_id=?""",
                 (coder, dispute_id),
             ).fetchone()
-            if current and current[0] == data:
+            if current and current[0] == data and current[2] == schema_version and current[3] == schema_hash:
                 return "unchanged", int(current[1])
             revision = 1 if not current else int(current[1]) + 1
             event_type = "submit" if not current else "revise"

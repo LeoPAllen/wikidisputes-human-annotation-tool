@@ -71,6 +71,32 @@ def test_inline_workflow_has_no_stages_and_conditional_children(monkeypatch, syn
     assert len([item for item in app.text_area if item.label == "Optional comment"]) == 1
 
 
+def test_landing_and_annotation_navigation_target_specific_utterances(monkeypatch, synthetic_project):
+    storage = Storage(synthetic_project.database_path)
+    storage.set_active_coder("coder_01")
+    app = configured(monkeypatch, synthetic_project)
+
+    dispute = next(item for item in app.selectbox if item.label == "Article / dispute")
+    dispute.set_value(dispute.options[0])
+    app = app.run()
+    utterance = next(item for item in app.selectbox if item.label == "Utterance")
+    utterance.set_value(next(option for option in utterance.options if option.startswith("#3")))
+    app = app.run()
+    app = next(button for button in app.button if button.label == "Open selected utterance →").click().run()
+
+    assert app.session_state["unit_id"] == "u2"
+    assert app.title[0].value == "Article"
+    assert any("Dispute D1 · Utterance #3 · ID u2" in item.value for item in app.caption)
+    rendered = " ".join(str(item.value) for item in app.markdown)
+    assert "Replies to #2 · A · ID u1" in rendered
+
+    target = next(item for item in app.selectbox if item.label == "Navigate to utterance")
+    target.set_value(next(option for option in target.options if option.startswith("#2")))
+    app = app.run()
+    app = next(button for button in app.button if button.label == "Go to selected utterance →").click().run()
+    assert app.session_state["unit_id"] == "u1"
+
+
 KS_CHILD_LABELS = (
     "Does it make a substantive claim?",
     "Does it directly refer to evidence or another supporting basis?",

@@ -122,6 +122,35 @@ def dispute_choices() -> dict[str, str]:
     return choices
 
 
+def utterance_choices(dispute_id: str) -> dict[str, str]:
+    choices = {}
+    for _, turn in dataset.annotatable_in_dispute(dispute_id).iterrows():
+        uid = str(turn["utterance_id"])
+        status = "Submitted" if uid in submitted else "Not submitted"
+        text = " ".join(str(turn["utterance_text"]).split())
+        preview = text if len(text) <= 90 else f"{text[:87]}…"
+        label = f"#{int(turn['utterance_order'])} · {turn['speaker_id']} · {status} · {preview} · {uid}"
+        choices[label] = uid
+    return choices
+
+
+def focal_reply_description(dispute_id: str, source_row) -> str | None:
+    raw_target = source_row.get("reply_to_utterance_id")
+    target_id = "" if raw_target is None else str(raw_target).strip()
+    if target_id.casefold() in {"", "nan", "<na>", "none"}:
+        return None
+    dispute = dataset.full_dispute(dispute_id)
+    matches = dispute[dispute["utterance_id"].astype(str) == target_id]
+    if matches.empty:
+        return f"Replies to utterance ID {target_id} (target unavailable)"
+    target = matches.iloc[0]
+    raw_speaker = target.get("speaker_id")
+    speaker = "" if raw_speaker is None else str(raw_speaker).strip()
+    if speaker.casefold() in {"", "nan", "<na>", "none"}:
+        speaker = "unknown speaker"
+    return f"Replies to #{int(target['utterance_order'])} · {speaker} · ID {target_id}"
+
+
 if "page" not in st.session_state:
     st.session_state.page = "home"
 
@@ -129,7 +158,20 @@ if st.session_state.page == "home":
     st.title("Annotation workspace")
     st.metric("Utterances submitted", f"{len(submitted)} / {len(frame)}")
     choices = dispute_choices()
-    selected = st.selectbox("Dispute", list(choices), index=None, placeholder="Choose an article and dispute")
+    selected = st.selectbox("Article / dispute", list(choices), index=None, placeholder="Choose an article and dispute")
+    selected_utterance = None
+    selected_utterances = {}
+    if selected:
+        selected_utterances = utterance_choices(choices[selected])
+        selected_utterance = st.selectbox(
+            "Utterance",
+            list(selected_utterances),
+            index=None,
+            placeholder="Choose a specific utterance",
+        )
+        if selected_utterance and st.button("Open selected utterance →", type="primary"):
+            go("utterance", uid=selected_utterances[selected_utterance], did=choices[selected])
+            st.rerun()
     if selected and st.button("Open dispute →", type="primary"):
         destination = dispute_destination(dataset, choices[selected], set(submitted), completed_disputes)
         go(destination.page, uid=destination.unit_id, did=destination.dispute_id or choices[selected])
@@ -208,6 +250,8 @@ if st.session_state.get("timer_uid") != uid:
     st.session_state.utterance_timer_start = time.monotonic()
     st.session_state.utterance_opened_at = opened_at()
 
+st.title(article_title(row))
+st.caption(f"Dispute {did} · Utterance #{order} · ID {uid}")
 with st.container(border=True):
     left, right = st.columns(2)
     previous = previous_utterance(dataset, did, order)
@@ -217,11 +261,31 @@ with st.container(border=True):
     if right.button("← Workspace"):
         go("home")
         st.rerun()
+    navigation_choices = dispute_choices()
+    current_dispute_label = next(label for label, value in navigation_choices.items() if value == did)
+    selected_dispute_label = st.selectbox(
+        "Navigate to article / dispute",
+        list(navigation_choices),
+        index=list(navigation_choices).index(current_dispute_label),
+        key=f"annotation_dispute_navigation_{uid}",
+    )
+    navigation_did = navigation_choices[selected_dispute_label]
+    navigation_utterances = utterance_choices(navigation_did)
+    selected_utterance_label = st.selectbox(
+        "Navigate to utterance",
+        list(navigation_utterances),
+        index=None,
+        placeholder="Choose a specific utterance",
+        key=f"annotation_utterance_navigation_{uid}",
+    )
+    if selected_utterance_label and st.button("Go to selected utterance →"):
+        go("utterance", uid=navigation_utterances[selected_utterance_label], did=navigation_did)
+        st.rerun()
 
 st.progress(len(submitted) / max(1, len(frame)), text=f"{len(submitted)} of {len(frame)} utterances submitted")
 reading, coding = st.columns([0.56, 0.44], gap="large")
 with reading.container(height=650, border=False, key="utterance_reading_pane"):
-    focal_card(row, None)
+    focal_card(row, focal_reply_description(did, row))
     source_details(row)
     st.subheader("Earlier conversation")
     if prior.empty:
