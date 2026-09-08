@@ -38,6 +38,11 @@ inapplicable nulls as blank cells, uses nullable integers for binary/audit value
 obsolete schema fields, and retains source identifiers plus audit provenance. Historical SQLite event payloads remain
 unchanged and available in database backups.
 
+To update inputs, replace `data/source/gold_input.xlsx` and/or `data/source/codebook.xlsx`, then restart Streamlit.
+Annotations follow the Gold stable utterance key, so source edits and reordering do not reset SQLite. Coders may mark a
+substantive unit “Malformed utterance / not reliably one speaker-turn”; construct labels then become optional, existing
+answers are retained, and the unit remains in the queue and export.
+
 ## Verification
 
 ```bash

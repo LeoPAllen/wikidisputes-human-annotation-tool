@@ -119,10 +119,12 @@ def source_details(row: pd.Series) -> None:
         for label, name in (
             ("Utterance ID", "utterance_id"),
             ("Dispute ID", "dispute_id"),
-            ("Original ID", "original_id"),
+            ("Original ID", "original_utterance_id"),
             ("Reply ID", "reply_to_utterance_id"),
             ("Source row", "_source_row"),
             ("Utterance type", "utterance_type"),
+            ("Wikipedia revision", "wikipedia_revision_url"),
+            ("Text source", "utterance_text_source"),
         ):
             value = row.get(name)
             if value is not None and not pd.isna(value):

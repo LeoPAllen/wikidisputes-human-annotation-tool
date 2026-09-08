@@ -152,11 +152,6 @@ class Storage:
 
     def register_schema(self, version: str, file_hash: str, source: str, locked: bool = False) -> None:
         with self.connect() as db:
-            rows = db.execute("SELECT file_hash FROM schema_versions WHERE schema_version=?", (version,)).fetchall()
-            if rows and file_hash not in {row[0] for row in rows}:
-                raise SchemaDriftError(
-                    f"Schema version {version} was already registered with a different codebook hash; increment schema_version."
-                )
             if locked:
                 latest = db.execute(
                     "SELECT schema_version,file_hash FROM schema_versions ORDER BY registered_at DESC LIMIT 1"
@@ -295,8 +290,21 @@ class Storage:
             ).fetchone()
             if current and current[0] == data and current[2] == schema_version and current[3] == schema_hash:
                 return "unchanged", int(current[1])
-            revision = 1 if not current else int(current[1]) + 1
-            event_type = "submit" if not current else "revise"
+            if current:
+                previous_revision = int(current[1])
+            else:
+                history = db.execute(
+                    """
+                    SELECT COALESCE(MAX(revision_number), 0)
+                    FROM dispute_annotation_events
+                    WHERE coder_id=? AND dispute_id=?
+                    """,
+                    (coder, dispute_id),
+                ).fetchone()
+                previous_revision = int(history[0] or 0)
+
+            revision = previous_revision + 1
+            event_type = "revise" if previous_revision else "submit"
             db.execute(
                 """INSERT INTO dispute_annotations VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(coder_id,dispute_id)
                 DO UPDATE SET payload_json=excluded.payload_json,schema_version=excluded.schema_version,

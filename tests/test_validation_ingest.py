@@ -54,5 +54,5 @@ def test_real_workbook_passes_and_has_authoritative_counts():
     assert data.source_rows.dispute_id.nunique() == 34
     assert any("later utterance_order" in warning for warning in result.warnings)
     assert sha256(Path("data/source/gold_input.xlsx").read_bytes()).hexdigest() == (
-        "2dc07f98ac7832a4099adad0866e68d82fb3cb2f76400760a9305799884ec9d6"
+        "d742e807762f31d8a41d344c85ccb4499b3942128935b8f63b404a812b79f01c"
     )

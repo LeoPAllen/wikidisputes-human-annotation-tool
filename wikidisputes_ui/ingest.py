@@ -38,6 +38,7 @@ ANNOTATION_COLUMNS = {
     "coder_confidence",
     "review_flag",
     "coder_notes",
+    "malformed_utterance",
 }
 
 # The immutable source workbook may retain blank columns from earlier schemas.
@@ -78,10 +79,21 @@ LEGACY_ANNOTATION_COLUMNS = {
 }
 LEGACY_SOURCE_ANNOTATION_COLUMNS = ANNOTATION_COLUMNS | LEGACY_ANNOTATION_COLUMNS
 
+# Retained in the authoritative source, but intentionally hidden from coders.
+CODER_HIDDEN_SOURCE_COLUMNS = {
+    "escalated",
+    "dispute_resolution_url",
+}
+
 
 @dataclass
 class Dataset:
     source_rows: pd.DataFrame
+
+    def __post_init__(self) -> None:
+        if "_annotation_key" not in self.source_rows:
+            self.source_rows = self.source_rows.copy()
+            self.source_rows["_annotation_key"] = self.source_rows.apply(stable_annotation_key, axis=1)
 
     @property
     def annotatable_rows(self) -> pd.DataFrame:
@@ -117,11 +129,24 @@ def read_gold(path: str | Path, annotation_sheet: str = "Gold_Annotation") -> Da
     frame = pd.read_excel(path, sheet_name=annotation_sheet, dtype=object)
     frame["utterance_order"] = pd.to_numeric(frame["utterance_order"], errors="raise").astype(int)
     frame["_source_row"] = range(2, len(frame) + 2)
+    frame["_annotation_key"] = frame.apply(stable_annotation_key, axis=1)
     return Dataset(frame)
 
 
+def stable_annotation_key(row: pd.Series) -> str:
+    for name in ("logical_utterance_uid", "original_utterance_id", "utterance_id"):
+        value = row.get(name)
+        if value is not None and not pd.isna(value) and str(value).strip():
+            return str(value).strip()
+    raise ValueError("Gold row has no stable annotation key.")
+
+
 def source_metadata(row: pd.Series) -> dict[str, Any]:
-    return {str(key): (None if pd.isna(value) else value) for key, value in row.items() if not str(key).startswith("_")}
+    return {
+        str(key): (None if pd.isna(value) else value)
+        for key, value in row.items()
+        if not str(key).startswith("_") and str(key) not in CODER_HIDDEN_SOURCE_COLUMNS
+    }
 
 
 def article_title(row: pd.Series) -> str:

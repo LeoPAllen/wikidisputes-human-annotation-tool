@@ -10,7 +10,8 @@ def test_authoritative_one_sheet_codebook():
     assert tuple(book.fields) == EXPECTED_LABELS
     assert tuple(book.dispute_objects) == EXPECTED_DISPUTE_OBJECTS
     assert "binary {0,1}" in book.fields["KI_compromise_position"].indicator
-    assert book.fields["KS_restaking"].example_provenance
+    assert book.fields["KS_restaking"].definition
+    assert book.fields["KS_restaking"].rule
 
 
 def test_missing_duplicate_and_unexpected_labels_are_rejected(tmp_path):

@@ -14,7 +14,17 @@ BASE_BINARY = (
 )
 KS_FIELDS = ("KS_claim_present", "KS_evidence_reference", "KS_reasoning", "KS_restaking")
 KI_FIELDS = ("KI_solicit_feedback", "KI_compromise_position")
-ANNOTATION_FIELDS = BASE_BINARY + KS_FIELDS + KI_FIELDS + ("coder_confidence", "review_flag", "coder_notes")
+ANNOTATION_FIELDS = (
+    BASE_BINARY
+    + KS_FIELDS
+    + KI_FIELDS
+    + (
+        "malformed_utterance",
+        "coder_confidence",
+        "review_flag",
+        "coder_notes",
+    )
+)
 
 
 @dataclass(frozen=True)
@@ -34,7 +44,10 @@ class ValidationResult:
 
 def applicable_fields(values: dict[str, Any], context: ContextState | None = None, low_threshold: int = 2) -> set[str]:
     del context, low_threshold
-    applicable = set(BASE_BINARY) | {"coder_confidence", "review_flag", "coder_notes"}
+    applicable = set(BASE_BINARY) | {"malformed_utterance", "coder_confidence", "review_flag", "coder_notes"}
+    if values.get("malformed_utterance") is True:
+        applicable.update(KS_FIELDS + KI_FIELDS)
+        return applicable
     if values.get("KS_present") == 1:
         applicable.update(KS_FIELDS)
     if values.get("KI_present") == 1:
@@ -53,12 +66,15 @@ def normalize_and_validate(
     del evidence_types
     applicable = applicable_fields(values, context, low_threshold)
     payload = {name: values.get(name) if name in applicable else None for name in ANNOTATION_FIELDS}
+    payload["malformed_utterance"] = values.get("malformed_utterance") is True
     answered_fields.intersection_update(applicable)
     errors: dict[str, str] = {}
-    required = set(BASE_BINARY) | {"coder_confidence", "review_flag"}
-    if payload["KS_present"] == 1:
+    required = {"coder_confidence", "review_flag"}
+    if payload["malformed_utterance"] is not True:
+        required.update(BASE_BINARY)
+    if payload["malformed_utterance"] is not True and payload["KS_present"] == 1:
         required.update(KS_FIELDS)
-    if payload["KI_present"] == 1:
+    if payload["malformed_utterance"] is not True and payload["KI_present"] == 1:
         required.update(KI_FIELDS)
     if require_complete:
         for name in required:
@@ -67,6 +83,8 @@ def normalize_and_validate(
     for name in BASE_BINARY + KS_FIELDS + KI_FIELDS + ("review_flag",):
         if payload.get(name) is not None and payload[name] not in (0, 1):
             errors[name] = "Choose No or Yes."
+    if type(payload.get("malformed_utterance")) is not bool:
+        errors["malformed_utterance"] = "Choose whether the utterance is malformed."
     confidence = payload.get("coder_confidence")
     if confidence is not None and (type(confidence) is not int or confidence not in range(1, 6)):
         errors["coder_confidence"] = "Choose an integer from 1 through 5."

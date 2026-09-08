@@ -15,6 +15,7 @@ from wikidisputes_ui.export import build_export, safe_export_name
 from wikidisputes_ui.ingest import article_title, read_gold
 from wikidisputes_ui.models import BASE_BINARY, KI_FIELDS, KS_FIELDS, applicable_fields, normalize_and_validate
 from wikidisputes_ui.navigation import dispute_destination, dispute_progress, previous_utterance
+from wikidisputes_ui.source_migration import reconcile_annotation_keys
 from wikidisputes_ui.storage import Storage
 from wikidisputes_ui.ui_components import (
     TaskCounter,
@@ -48,6 +49,7 @@ def resources(config_file: str, codebook_hash: str, gold_hash: str):
     codebook = load_codebook(config.codebook_path, config.schema_sheet)
     dataset = read_gold(config.gold_path, config.annotation_sheet)
     storage = Storage(config.database_path)
+    reconcile_annotation_keys(storage, dataset)
     storage.register_schema(
         schema_id(codebook.file_hash), codebook.file_hash, codebook.source_filename, config.schema_locked
     )
@@ -82,12 +84,12 @@ if coder is None:
     st.stop()
 
 frame = dataset.annotatable_rows
-all_ids = set(frame["utterance_id"].astype(str))
-current_rows = [r for r in storage.rows("utterance_annotations", coder) if r["schema_hash"] == codebook.file_hash]
+all_ids = set(frame["_annotation_key"].astype(str))
+current_rows = storage.rows("utterance_annotations", coder)
 submitted = {
     str(r["utterance_id"]): r for r in current_rows if r["status"] == "submitted" and str(r["utterance_id"]) in all_ids
 }
-dispute_rows = [r for r in storage.rows("dispute_annotations", coder) if r["schema_hash"] == codebook.file_hash]
+dispute_rows = storage.rows("dispute_annotations", coder)
 completed_disputes = {str(r["dispute_id"]) for r in dispute_rows}
 
 st.sidebar.caption(f"Coder: **{coder}**")
@@ -125,11 +127,12 @@ def dispute_choices() -> dict[str, str]:
 def utterance_choices(dispute_id: str) -> dict[str, str]:
     choices = {}
     for _, turn in dataset.annotatable_in_dispute(dispute_id).iterrows():
-        uid = str(turn["utterance_id"])
+        uid = str(turn["_annotation_key"])
+        current_id = str(turn["utterance_id"])
         status = "Submitted" if uid in submitted else "Not submitted"
         text = " ".join(str(turn["utterance_text"]).split())
         preview = text if len(text) <= 90 else f"{text[:87]}…"
-        label = f"#{int(turn['utterance_order'])} · {turn['speaker_id']} · {status} · {preview} · {uid}"
+        label = f"#{int(turn['utterance_order'])} · {turn['speaker_id']} · {status} · {preview} · {current_id}"
         choices[label] = uid
     return choices
 
@@ -144,6 +147,10 @@ def focal_reply_description(dispute_id: str, source_row) -> str | None:
     if matches.empty:
         return f"Replies to utterance ID {target_id} (target unavailable)"
     target = matches.iloc[0]
+
+    if int(target["utterance_order"]) >= int(source_row["utterance_order"]):
+        return "Reply target reconstructed from final state; later target remains hidden."
+
     raw_speaker = target.get("speaker_id")
     speaker = "" if raw_speaker is None else str(raw_speaker).strip()
     if speaker.casefold() in {"", "nan", "<na>", "none"}:
@@ -176,22 +183,22 @@ if st.session_state.page == "home":
         destination = dispute_destination(dataset, choices[selected], set(submitted), completed_disputes)
         go(destination.page, uid=destination.unit_id, did=destination.dispute_id or choices[selected])
         st.rerun()
-    next_rows = frame[~frame["utterance_id"].astype(str).isin(submitted)]
+    next_rows = frame[~frame["_annotation_key"].astype(str).isin(submitted)]
     if not next_rows.empty and st.button("Resume annotation", type="primary"):
         row = next_rows.iloc[0]
-        go("utterance", uid=str(row["utterance_id"]), did=str(row["dispute_id"]))
+        go("utterance", uid=str(row["_annotation_key"]), did=str(row["dispute_id"]))
         st.rerun()
     st.stop()
 
 if st.session_state.page == "dispute":
     did = str(st.session_state.dispute_id)
-    required_ids = set(dataset.annotatable_in_dispute(did)["utterance_id"].astype(str))
+    required_ids = set(dataset.annotatable_in_dispute(did)["_annotation_key"].astype(str))
     if not required_ids <= set(submitted):
         st.error("Submit every substantive utterance before completing the dispute-level decision.")
         pending = dataset.annotatable_in_dispute(did)
-        pending = pending[~pending["utterance_id"].astype(str).isin(submitted)]
+        pending = pending[~pending["_annotation_key"].astype(str).isin(submitted)]
         if st.button("Return to next utterance", type="primary"):
-            go("utterance", uid=str(pending.iloc[0]["utterance_id"]), did=did)
+            go("utterance", uid=str(pending.iloc[0]["_annotation_key"]), did=did)
             st.rerun()
         st.stop()
     st.title("Final dispute decision")
@@ -234,7 +241,7 @@ if st.session_state.page == "dispute":
     st.stop()
 
 uid = str(st.session_state.unit_id)
-matches = frame[frame["utterance_id"].astype(str) == uid]
+matches = frame[frame["_annotation_key"].astype(str) == uid]
 if matches.empty:
     st.error("Selected utterance is not annotatable.")
     st.stop()
@@ -242,16 +249,15 @@ row = matches.iloc[0]
 did, order = str(row["dispute_id"]), int(row["utterance_order"])
 prior = dataset.displayable_prior_context(did, order)
 current = storage.current_utterance(coder, uid)
-if current and current["schema_hash"] != codebook.file_hash:
-    current = None
 defaults = {} if current is None else current["payload"]
+
 if st.session_state.get("timer_uid") != uid:
     st.session_state.timer_uid = uid
     st.session_state.utterance_timer_start = time.monotonic()
     st.session_state.utterance_opened_at = opened_at()
 
 st.title(article_title(row))
-st.caption(f"Dispute {did} · Utterance #{order} · ID {uid}")
+st.caption(f"Dispute {did} · Utterance #{order} · ID {row['utterance_id']}")
 with st.container(border=True):
     left, right = st.columns(2)
     previous = previous_utterance(dataset, did, order)
@@ -295,7 +301,8 @@ with reading.container(height=650, border=False, key="utterance_reading_pane"):
         if turn["utterance_role"] == "context":
             badges += ("Context — not annotated",)
         else:
-            prior_annotation = submitted.get(str(turn["utterance_id"]))
+            prior_uid = str(turn["_annotation_key"])
+            prior_annotation = submitted.get(prior_uid)
             if prior_annotation is None:
                 badges += ("Not annotated",)
             else:
@@ -326,6 +333,13 @@ with coding.container(height=430, border=False, key="utterance_coding_pane"):
     answered = set() if current is None else set(current["answered_fields"])
     tasks = TaskCounter()
 
+    values["malformed_utterance"] = st.checkbox(
+        "Malformed utterance / not reliably one speaker-turn",
+        value=values.get("malformed_utterance") is True,
+        key=f"malformed_utterance_{uid}",
+    )
+    answered.add("malformed_utterance")
+
     def ask(name: str) -> None:
         values[name] = binary_task(
             tasks, PROMPTS[name], codebook.fields[name], f"answer_{name}_{uid}", values.get(name)
@@ -335,28 +349,37 @@ with coding.container(height=430, border=False, key="utterance_coding_pane"):
         else:
             answered.add(name)
 
-    ask("KS_present")
-    if values["KS_present"] == 1:
-        with st.container(border=True):
-            st.caption("Knowledge staking details")
+    if values["malformed_utterance"]:
+        for name in BASE_BINARY + KS_FIELDS + KI_FIELDS:
+            widget_key = f"answer_{name}_{uid}"
+            if widget_key in st.session_state:
+                values[name] = st.session_state[widget_key]
+            if values.get(name) is not None:
+                answered.add(name)
+        st.caption("Construct labels are optional for this utterance; any answers already entered are preserved.")
+    else:
+        ask("KS_present")
+        if values["KS_present"] == 1:
+            with st.container(border=True):
+                st.caption("Knowledge staking details")
+                for name in KS_FIELDS:
+                    ask(name)
+        else:
             for name in KS_FIELDS:
-                ask(name)
-    else:
-        for name in KS_FIELDS:
-            values[name] = None
-            answered.discard(name)
-    ask("KI_present")
-    if values["KI_present"] == 1:
-        with st.container(border=True):
-            st.caption("Knowledge integration details")
+                values[name] = None
+                answered.discard(name)
+        ask("KI_present")
+        if values["KI_present"] == 1:
+            with st.container(border=True):
+                st.caption("Knowledge integration details")
+                for name in KI_FIELDS:
+                    ask(name)
+        else:
             for name in KI_FIELDS:
-                ask(name)
-    else:
-        for name in KI_FIELDS:
-            values[name] = None
-            answered.discard(name)
-    for name in BASE_BINARY[2:]:
-        ask(name)
+                values[name] = None
+                answered.discard(name)
+        for name in BASE_BINARY[2:]:
+            ask(name)
     task_intro(tasks, "How confident are you in this utterance annotation?", description="Choose 1 through 5.")
     confidence_options = list(range(1, 6))
     values["coder_confidence"] = st.radio(
@@ -419,9 +442,9 @@ with coding:
             )
             turns = dataset.annotatable_in_dispute(did)
             later = turns[turns["utterance_order"] > order]
-            pending = later[~later["utterance_id"].astype(str).isin(set(submitted) | {uid})]
+            pending = later[~later["_annotation_key"].astype(str).isin(set(submitted) | {uid})]
             if not pending.empty:
-                go("utterance", uid=str(pending.iloc[0]["utterance_id"]), did=did)
+                go("utterance", uid=str(pending.iloc[0]["_annotation_key"]), did=did)
             else:
                 go("dispute", did=did)
             st.rerun()

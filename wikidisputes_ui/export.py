@@ -10,7 +10,12 @@ from typing import Any, Sequence
 
 import pandas as pd
 
-from .ingest import ANNOTATION_COLUMNS, LEGACY_SOURCE_ANNOTATION_COLUMNS, Dataset
+from .ingest import (
+    ANNOTATION_COLUMNS,
+    CODER_HIDDEN_SOURCE_COLUMNS,
+    LEGACY_SOURCE_ANNOTATION_COLUMNS,
+    Dataset,
+)
 from .storage import Storage
 
 INTEGER_COLUMNS = {
@@ -31,6 +36,7 @@ INTEGER_COLUMNS = {
 }
 
 AUDIT_EXPORT_COLUMNS = (
+    "malformed_utterance",
     "coder_confidence",
     "review_flag",
     "coder_notes",
@@ -62,8 +68,8 @@ def build_export(
     active_schema_hash: str,
     schema_fields: Sequence[str],
 ) -> bytes:
-    current = [row for row in storage.rows("utterance_annotations", coder) if row["schema_hash"] == active_schema_hash]
-    disputes = [row for row in storage.rows("dispute_annotations", coder) if row["schema_hash"] == active_schema_hash]
+    current = storage.rows("utterance_annotations", coder)
+    disputes = storage.rows("dispute_annotations", coder)
     current_by_id = {str(row["utterance_id"]): row for row in current}
     dispute_by_id = {str(row["dispute_id"]): json.loads(row["payload_json"]) for row in disputes}
     schema_columns = list(dict.fromkeys(schema_fields))
@@ -73,13 +79,14 @@ def build_export(
         if not str(key).startswith("_")
         and key not in LEGACY_SOURCE_ANNOTATION_COLUMNS
         and key not in ANNOTATION_COLUMNS
+        and key not in CODER_HIDDEN_SOURCE_COLUMNS
     ]
     output_columns = list(
         dict.fromkeys(source_columns + schema_columns + list(AUDIT_EXPORT_COLUMNS) + list(PROVENANCE_COLUMNS))
     )
     output_rows = []
     for _, source_row in dataset.annotatable_rows.iterrows():
-        annotation = current_by_id.get(str(source_row["utterance_id"]))
+        annotation = current_by_id.get(str(source_row["_annotation_key"]))
         if not annotation or annotation["status"] != "submitted":
             continue
         row = {key: (None if pd.isna(value) else value) for key, value in source_row.items() if key in source_columns}

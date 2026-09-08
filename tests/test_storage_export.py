@@ -5,7 +5,7 @@ import pytest
 from wikidisputes_ui.codebook import load_codebook
 from wikidisputes_ui.export import build_export
 from wikidisputes_ui.ingest import read_gold
-from wikidisputes_ui.storage import MigrationError, SchemaDriftError, Storage
+from wikidisputes_ui.storage import MigrationError, Storage
 
 
 def save(storage, coder="coder_1", uid="u1", payload=None):
@@ -27,8 +27,7 @@ def save(storage, coder="coder_1", uid="u1", payload=None):
 def test_schema_drift_events_revisions_and_utc(tmp_path):
     storage = Storage(tmp_path / "db.sqlite")
     storage.register_schema("0.9.7", "abc", "codebook.xlsx")
-    with pytest.raises(SchemaDriftError):
-        storage.register_schema("0.9.7", "changed", "codebook.xlsx")
+    storage.register_schema("0.9.7", "changed", "codebook.xlsx")
     assert save(storage) == ("submit", 1)
     assert save(storage) == ("unchanged", 1)
     assert save(storage, payload={"KS_present": 1}) == ("revise", 2)
@@ -149,7 +148,7 @@ def test_dispute_completion_export_propagation_and_isolation(tmp_path, synthetic
         assert not columns & {"partition", "phase", "split", "dataset_key", "source_namespace"}
 
 
-def test_export_is_locked_to_active_schema_and_excludes_history(tmp_path, synthetic_project):
+def test_export_preserves_compatible_annotation_from_older_schema(tmp_path, synthetic_project):
     storage = Storage(tmp_path / "db.sqlite")
     save(storage)
     book = load_codebook(synthetic_project.codebook_path)
@@ -157,7 +156,7 @@ def test_export_is_locked_to_active_schema_and_excludes_history(tmp_path, synthe
     workbook = pd.ExcelFile(BytesIO(data))
     assert workbook.sheet_names == ["Gold_Annotations"]
     annotations = pd.read_excel(BytesIO(data), sheet_name="Gold_Annotations")
-    assert annotations.empty
+    assert list(annotations["utterance_id"]) == ["u1"]
     assert {
         "KS_restaking",
         "KS_reasoning",

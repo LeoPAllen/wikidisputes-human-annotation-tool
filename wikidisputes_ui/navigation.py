@@ -16,7 +16,7 @@ class Destination:
 
 def previous_utterance(dataset: Dataset, dispute_id: str, utterance_order: int) -> str | None:
     earlier = dataset.earlier_annotatable_turns(dispute_id, utterance_order)
-    return None if earlier.empty else str(earlier.iloc[-1]["utterance_id"])
+    return None if earlier.empty else str(earlier.iloc[-1]["_annotation_key"])
 
 
 def dispute_destination(
@@ -27,12 +27,12 @@ def dispute_destination(
 ) -> Destination:
     """Choose the only chronology-safe default destination for a dispute."""
     turns = dataset.annotatable_in_dispute(dispute_id)
-    pending = turns[~turns["utterance_id"].astype(str).isin(submitted_ids)]
+    pending = turns[~turns["_annotation_key"].astype(str).isin(submitted_ids)]
     if not pending.empty:
-        return Destination("utterance", str(pending.iloc[0]["utterance_id"]), dispute_id)
+        return Destination("utterance", str(pending.iloc[0]["_annotation_key"]), dispute_id)
     if dispute_id not in completed_disputes:
         return Destination("dispute", dispute_id=dispute_id)
-    return Destination("utterance", str(turns.iloc[0]["utterance_id"]), dispute_id)
+    return Destination("utterance", str(turns.iloc[0]["_annotation_key"]), dispute_id)
 
 
 def is_reviewable_without_gap(
@@ -43,10 +43,10 @@ def is_reviewable_without_gap(
 ) -> bool:
     """A submitted turn is reviewable only when all earlier substantive turns remain submitted."""
     earlier = dataset.earlier_annotatable_turns(dispute_id, utterance_order)
-    return set(earlier["utterance_id"].astype(str)) <= submitted_ids
+    return set(earlier["_annotation_key"].astype(str)) <= submitted_ids
 
 
 def dispute_progress(dataset: Dataset, dispute_id: str, submitted_ids: set[str]) -> tuple[int, int]:
     turns = dataset.annotatable_in_dispute(dispute_id)
-    ids = set(turns["utterance_id"].astype(str))
+    ids = set(turns["_annotation_key"].astype(str))
     return len(ids & submitted_ids), len(ids)
