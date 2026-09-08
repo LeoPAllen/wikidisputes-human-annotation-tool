@@ -19,31 +19,38 @@ def test_valid_fixture_roles_and_strict_past(synthetic_project):
     assert "Reply" not in " ".join(data.displayable_prior_context("D1", 2).utterance_text)
 
 
-def test_qc_missing_reply_and_role_errors_block(synthetic_project, source_rows):
+def test_qc_missing_reply_warns_while_role_error_blocks(synthetic_project, source_rows):
     frame = source_rows.copy()
     frame.loc[2, "reply_to_utterance_id"] = "missing"
     frame.loc[0, "utterance_role"] = "heading"
     with pd.ExcelWriter(synthetic_project.gold_path, engine="openpyxl") as writer:
         frame.to_excel(writer, sheet_name="Gold_Annotation", index=False)
     result = validate_inputs(synthetic_project)
-    joined = "\n".join(result.errors)
-    assert "not in dispute" in joined
-    assert "exactly context or utterance" in joined
+    assert any("not available in this dispute" in warning for warning in result.warnings)
+    assert any("exactly context or utterance" in error for error in result.errors)
 
 
-def test_cross_dispute_reply_blocks(synthetic_project, source_rows):
+def test_cross_dispute_reply_warns_and_never_exposes_target_text(synthetic_project, source_rows):
     other = source_rows.iloc[[0, 1]].copy()
     other["dispute_sequence"] = 2
     other["dispute_id"] = "D2"
     other["utterance_id"] = ["ctx2", "d2u1"]
     other["reply_to_utterance_id"] = None
+    other.loc[other["utterance_id"] == "d2u1", "utterance_text"] = "OUTSIDE DISPUTE TEXT"
     frame = pd.concat([source_rows, other], ignore_index=True)
     frame.loc[1, "reply_to_utterance_id"] = "d2u1"
+    frame["reply_to_utterance_id_raw"] = frame["reply_to_utterance_id"]
     with pd.ExcelWriter(synthetic_project.gold_path, engine="openpyxl") as writer:
         frame.to_excel(writer, sheet_name="Gold_Annotation", index=False)
     result = validate_inputs(synthetic_project)
-    assert result.blocking
-    assert any("not in dispute D1" in error for error in result.errors)
+    assert not result.blocking
+    assert any("reply target 'd2u1' is not available in this dispute" in warning for warning in result.warnings)
+    data = read_gold(synthetic_project.gold_path)
+    focal = data.source_rows[data.source_rows["utterance_id"] == "u1"].iloc[0]
+    assert focal["reply_to_utterance_id"] == "d2u1"
+    assert focal["reply_to_utterance_id_raw"] == "d2u1"
+    visible = " ".join(data.displayable_prior_context("D1", 2)["utterance_text"].astype(str))
+    assert "OUTSIDE DISPUTE TEXT" not in visible
 
 
 def test_real_workbook_passes_and_has_authoritative_counts():

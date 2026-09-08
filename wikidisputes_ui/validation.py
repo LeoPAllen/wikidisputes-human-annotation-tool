@@ -114,8 +114,9 @@ def validate_inputs(config: ProjectConfig) -> QCResult:
                     continue
                 target = str(target)
                 if target not in id_to_order:
-                    result.errors.append(
-                        f"{sheet} row {idx + 2} ({row['utterance_id']}): reply target {target!r} is not in dispute {did}."
+                    result.warnings.append(
+                        f"{sheet} row {idx + 2} ({row['utterance_id']}): reply target {target!r} is not available "
+                        f"in this dispute; target context will not be shown."
                     )
                 elif id_to_order[target] >= int(row["utterance_order"]):
                     result.warnings.append(
