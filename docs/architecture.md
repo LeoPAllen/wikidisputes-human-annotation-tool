@@ -9,20 +9,20 @@ initial coding and revision. Context rows are never annotated. Applicability dep
 
 - five binary parent/control fields always apply;
 - four KS children apply when `KS_present=1`;
-- two KI children apply when `KI_present=1`;
 - confidence, review flag, and one optional comment apply to every utterance.
 
 The model clears hidden children to null and removes them from `answered_fields`. KS and KI are independent.
-`KS_restaking` is a direct coder judgment based on visible prior discussion. `KI_compromise_position` is binary.
+`KS_restaking` is a direct coder judgment based on visible prior discussion. `KI_present` has no child fields.
 
 Only when all substantive utterances in a dispute are submitted may the UI store the final dispute payload. That
-payload and its `answered_fields` contain only `C_primary_dispute_object`; the allowed values and explanations are
-parsed from bullets in its authoritative coding rule.
+payload and its `answered_fields` contain only `C_primary_dispute_object`; allowed values come from its authoritative
+Indicator enum, with matching explanations parsed from coding-rule bullets when available.
 
 SQLite current tables are coder-isolated projections; event tables are append-only. No schema migration is needed for
 the simplified fields because payloads are JSON. Each write retains schema identity, UTC timestamps, elapsed wall time,
 revision number, coder, and application version. Older payloads remain intact.
 
-The complete codebook file hash is the canonical schema identity. Progress and exports select the active hash. Excel
-exports have deterministic columns, include only submitted substantive rows, propagate the final dispute object, map
-SQL/JSON null to blank cells, and exclude obsolete and legacy gold annotation fields.
+The complete codebook file hash remains audit metadata, but completion and export compatibility depend on current
+payload structure rather than exact hash equality. Excel exports have deterministic columns, include only structurally
+compatible submitted substantive rows, propagate only a current-valid final dispute object, map SQL/JSON null to blank
+cells, and exclude obsolete and legacy gold annotation fields.

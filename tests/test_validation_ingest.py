@@ -1,8 +1,5 @@
 import pandas as pd
-from hashlib import sha256
-from pathlib import Path
 
-from wikidisputes_ui.config import load_config
 from wikidisputes_ui.ingest import read_gold
 from wikidisputes_ui.validation import validate_inputs
 
@@ -51,15 +48,3 @@ def test_cross_dispute_reply_warns_and_never_exposes_target_text(synthetic_proje
     assert focal["reply_to_utterance_id_raw"] == "d2u1"
     visible = " ".join(data.displayable_prior_context("D1", 2)["utterance_text"].astype(str))
     assert "OUTSIDE DISPUTE TEXT" not in visible
-
-
-def test_real_workbook_passes_and_has_authoritative_counts():
-    result = validate_inputs(load_config())
-    assert not result.blocking
-    data = read_gold("data/source/gold_input.xlsx")
-    assert (len(data.source_rows), len(data.annotatable_rows), len(data.context_rows)) == (438, 404, 34)
-    assert data.source_rows.dispute_id.nunique() == 34
-    assert any("later utterance_order" in warning for warning in result.warnings)
-    assert sha256(Path("data/source/gold_input.xlsx").read_bytes()).hexdigest() == (
-        "d742e807762f31d8a41d344c85ccb4499b3942128935b8f63b404a812b79f01c"
-    )

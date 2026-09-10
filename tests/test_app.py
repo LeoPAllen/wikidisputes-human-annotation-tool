@@ -1,5 +1,6 @@
 import json
 
+import pandas as pd
 from streamlit.testing.v1 import AppTest
 
 from wikidisputes_ui.storage import Storage
@@ -29,26 +30,59 @@ def radio(app, label):
     return next(item for item in app.radio if item.label == label)
 
 
+def current_payload(**changes):
+    payload = {
+        "KS_present": 0,
+        "KS_explicit_reasoning": None,
+        "KS_grounding": None,
+        "KS_restaking": None,
+        "KS_bounding": None,
+        "KI_present": 0,
+        "C_off_topic_shift": 0,
+        "C_interpersonal_attack_or_disrespect": 0,
+        "C_formal_governance_action": 0,
+        "malformed_utterance": False,
+        "coder_confidence": 3,
+        "review_flag": 0,
+        "coder_notes": None,
+    }
+    payload.update(changes)
+    return payload
+
+
+def save_payload(storage, payload, *, uid="u1", schema_hash="old-hash"):
+    storage.set_active_coder("coder_01")
+    storage.save_utterance(
+        coder="coder_01",
+        utterance_id=uid,
+        dispute_id="D1",
+        payload=payload,
+        answered_fields=set(payload),
+        submit=True,
+        schema_version="old-schema",
+        schema_hash=schema_hash,
+        opened_at="2020-01-01T00:00:00Z",
+        elapsed_wall_seconds=1,
+    )
+
+
 def answer_all(app, ks=0, ki=0):
-    radio(app, "Does this utterance state or challenge knowledge about the article or dispute?").set_value(ks)
+    radio(app, "Does this utterance stake knowledge?").set_value(ks)
     app = app.run()
     if ks:
         for label in (
-            "Does it make a substantive claim?",
-            "Does it directly refer to evidence or another supporting basis?",
-            "Does it connect evidence or a premise to a conclusion?",
-            "Does it repeat an earlier claim or objection without adding evidence or reasoning?",
+            "Does it make its reasoning explicit?",
+            "Does it ground its position?",
+            "Does it restate an earlier position?",
+            "Does it bound the claim?",
         ):
             radio(app, label).set_value(0)
-    radio(app, "Does this utterance coordiante, propose, report, or refine an article edit?").set_value(ki)
+    radio(app, "Does this utterance integrate knowledge?").set_value(ki)
     app = app.run()
-    if ki:
-        radio(app, "Does it ask others to assess, revise, or accept that edit?").set_value(0)
-        radio(app, "Does the edit visibly accommodate at least two positions or concerns?").set_value(0)
     for label in (
-        "Does this shift away from the article dispute?",
-        "Does this attack or disrespect another contributor?",
-        "Does this invoke or threaten a formal governance action?",
+        "Does this shift off topic?",
+        "Does this attack or disrespect a contributor?",
+        "Does this invoke formal governance?",
     ):
         radio(app, label).set_value(0)
     radio(app, "How confident are you in this utterance annotation?").set_value(3)
@@ -59,16 +93,87 @@ def answer_all(app, ks=0, ki=0):
 def test_inline_workflow_has_no_stages_and_conditional_children(monkeypatch, synthetic_project):
     app = enter(configured(monkeypatch, synthetic_project))
     labels = {item.label for item in app.radio}
-    assert "Does it make a substantive claim?" not in labels
-    radio(app, "Does this utterance state or challenge knowledge about the article or dispute?").set_value(1)
-    radio(app, "Does this utterance coordiante, propose, report, or refine an article edit?").set_value(1)
+    assert "Does it make its reasoning explicit?" not in labels
+    radio(app, "Does this utterance stake knowledge?").set_value(1)
+    radio(app, "Does this utterance integrate knowledge?").set_value(1)
     app = app.run()
     labels = {item.label for item in app.radio}
     assert len(set(KS_CHILD_LABELS) & labels) == 4
-    assert len(set(KI_CHILD_LABELS) & labels) == 2
+    assert not set(OBSOLETE_KI_CHILD_LABELS) & labels
     rendered = " ".join(str(m.value) for m in app.markdown)
     assert "Stage 1" not in rendered and "Stage 2" not in rendered and "Continue to details" not in rendered
     assert len([item for item in app.text_area if item.label == "Optional comment"]) == 1
+
+
+def test_question_text_is_loaded_from_workbook(monkeypatch, synthetic_project):
+    frame = pd.read_excel(synthetic_project.codebook_path, sheet_name="Core_Schema")
+    frame.loc[frame.Label == "KS_present", "question"] = "Workbook-specific KS wording?"
+    with pd.ExcelWriter(synthetic_project.codebook_path, engine="openpyxl") as writer:
+        frame.to_excel(writer, sheet_name="Core_Schema", index=False)
+    app = enter(configured(monkeypatch, synthetic_project))
+    labels = {item.label for item in app.radio}
+    assert "Workbook-specific KS wording?" in labels
+    assert "Does this utterance stake knowledge?" not in labels
+
+
+def test_question_only_hash_change_does_not_reset_progress(monkeypatch, synthetic_project):
+    storage = Storage(synthetic_project.database_path)
+    save_payload(storage, current_payload(), schema_hash="older-question-hash")
+    app = configured(monkeypatch, synthetic_project)
+    assert app.metric[0].value == "1 / 2"
+    dispute = next(item for item in app.selectbox if item.label == "Article / dispute")
+    dispute.set_value(dispute.options[0])
+    app = app.run()
+    utterance = next(item for item in app.selectbox if item.label == "Utterance")
+    assert any("Submitted" in option and option.startswith("#2") for option in utterance.options)
+
+
+def test_old_payload_is_incomplete_but_surviving_fields_prepopulate(monkeypatch, synthetic_project):
+    storage = Storage(synthetic_project.database_path)
+    save_payload(
+        storage,
+        {
+            "KS_present": 1,
+            "KS_claim_present": 1,
+            "KS_evidence_reference": 0,
+            "KS_reasoning": 1,
+            "KS_restaking": 0,
+            "KI_present": 1,
+            "C_off_topic_shift": 0,
+            "C_interpersonal_attack_or_disrespect": 0,
+            "C_formal_governance_action": 0,
+            "coder_confidence": 3,
+            "review_flag": 0,
+        },
+    )
+    app = configured(monkeypatch, synthetic_project)
+    assert app.metric[0].value == "0 / 2"
+    app = next(button for button in app.button if button.label == "Resume annotation").click().run()
+    assert radio(app, "Does this utterance stake knowledge?").value == 1
+    assert radio(app, "Does it restate an earlier position?").value == 0
+    assert radio(app, "Does this utterance integrate knowledge?").value == 1
+
+
+def test_obsolete_dispute_object_does_not_count_as_complete(monkeypatch, synthetic_project):
+    storage = Storage(synthetic_project.database_path)
+    save_payload(storage, current_payload(), uid="u1")
+    save_payload(storage, current_payload(), uid="u2")
+    storage.save_dispute(
+        coder="coder_01",
+        dispute_id="D1",
+        payload={"C_primary_dispute_object": "wording_or_framing"},
+        answered_fields={"C_primary_dispute_object"},
+        schema_version="old-schema",
+        schema_hash="old-hash",
+        opened_at="2020-01-01T00:00:00Z",
+        elapsed_wall_seconds=1,
+    )
+    app = configured(monkeypatch, synthetic_project)
+    dispute = next(item for item in app.selectbox if item.label == "Article / dispute")
+    dispute.set_value(dispute.options[0])
+    app = app.run()
+    app = next(button for button in app.button if button.label == "Open dispute →").click().run()
+    assert app.title[0].value == "Final dispute decision"
 
 
 def test_landing_and_annotation_navigation_target_specific_utterances(monkeypatch, synthetic_project):
@@ -98,12 +203,12 @@ def test_landing_and_annotation_navigation_target_specific_utterances(monkeypatc
 
 
 KS_CHILD_LABELS = (
-    "Does it make a substantive claim?",
-    "Does it directly refer to evidence or another supporting basis?",
-    "Does it connect evidence or a premise to a conclusion?",
-    "Does it repeat an earlier claim or objection without adding evidence or reasoning?",
+    "Does it make its reasoning explicit?",
+    "Does it ground its position?",
+    "Does it restate an earlier position?",
+    "Does it bound the claim?",
 )
-KI_CHILD_LABELS = (
+OBSOLETE_KI_CHILD_LABELS = (
     "Does it ask others to assess, revise, or accept that edit?",
     "Does the edit visibly accommodate at least two positions or concerns?",
 )
@@ -111,10 +216,10 @@ KI_CHILD_LABELS = (
 
 def test_parent_change_hides_and_clears_children(monkeypatch, synthetic_project):
     app = enter(configured(monkeypatch, synthetic_project))
-    radio(app, "Does this utterance state or challenge knowledge about the article or dispute?").set_value(1)
+    radio(app, "Does this utterance stake knowledge?").set_value(1)
     app = app.run()
     radio(app, KS_CHILD_LABELS[3]).set_value(1)
-    radio(app, "Does this utterance state or challenge knowledge about the article or dispute?").set_value(0)
+    radio(app, "Does this utterance stake knowledge?").set_value(0)
     app = app.run()
     assert not set(KS_CHILD_LABELS) & {item.label for item in app.radio}
 
@@ -127,11 +232,19 @@ def test_full_dispute_smoke_and_object_only_payload(monkeypatch, synthetic_proje
     app = answer_all(app, ks=1, ki=1)
     app = next(b for b in app.button if b.label == "Submit and next").click().run()
     assert app.title[0].value == "Final dispute decision"
-    assert [item.label for item in app.radio] == ["C_primary_dispute_object"]
-    app.radio[0].set_value("wording_or_framing")
+    assert [item.label for item in app.radio] == ["Which object primarily organizes this dispute?"]
+    assert app.radio[0].options == [
+        "Claim or evidence validity",
+        "Wording or representation",
+        "Inclusion or weight",
+        "Placement or structure",
+        "Mixed",
+        "Uncertain",
+    ]
+    app.radio[0].set_value("uncertain")
     app = next(b for b in app.button if b.label == "Complete dispute").click().run()
     row = Storage(synthetic_project.database_path).rows("dispute_annotations", "coder_01")[0]
-    assert json.loads(row["payload_json"]) == {"C_primary_dispute_object": "wording_or_framing"}
+    assert json.loads(row["payload_json"]) == {"C_primary_dispute_object": "uncertain"}
     assert json.loads(
         Storage(synthetic_project.database_path).rows("dispute_annotation_events", "coder_01")[0][
             "answered_fields_json"
@@ -160,9 +273,7 @@ def test_malformed_utterance_can_submit_without_construct_labels(monkeypatch, sy
         item for item in app.checkbox if item.label == "Malformed utterance / not reliably one speaker-turn"
     )
     app = malformed.check().run()
-    assert "Does this utterance state or challenge knowledge about the article or dispute?" not in {
-        item.label for item in app.radio
-    }
+    assert "Does this utterance stake knowledge?" not in {item.label for item in app.radio}
     radio(app, "How confident are you in this utterance annotation?").set_value(3)
     radio(app, "Flag this utterance for review?").set_value(0)
     app = next(button for button in app.button if button.label == "Submit and next").click().run()
@@ -189,7 +300,7 @@ def test_dispute_object_blocked_before_all_submissions(monkeypatch, synthetic_pr
     app.session_state["page"] = "dispute"
     app.session_state["dispute_id"] = "D1"
     app = app.run()
-    assert not any(item.label == "C_primary_dispute_object" for item in app.radio)
+    assert not any(item.label == "Which object primarily organizes this dispute?" for item in app.radio)
     assert any("Submit every substantive utterance" in item.value for item in app.error)
 
 

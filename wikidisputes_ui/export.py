@@ -16,17 +16,16 @@ from .ingest import (
     LEGACY_SOURCE_ANNOTATION_COLUMNS,
     Dataset,
 )
+from .models import is_current_dispute_decision, is_structurally_compatible_utterance
 from .storage import Storage
 
 INTEGER_COLUMNS = {
     "KS_present",
-    "KS_claim_present",
-    "KS_evidence_reference",
-    "KS_reasoning",
+    "KS_explicit_reasoning",
+    "KS_grounding",
     "KS_restaking",
+    "KS_bounding",
     "KI_present",
-    "KI_solicit_feedback",
-    "KI_compromise_position",
     "C_off_topic_shift",
     "C_interpersonal_attack_or_disrespect",
     "C_formal_governance_action",
@@ -67,6 +66,7 @@ def build_export(
     active_schema_id: str,
     active_schema_hash: str,
     schema_fields: Sequence[str],
+    dispute_objects: Sequence[str],
 ) -> bytes:
     current = storage.rows("utterance_annotations", coder)
     disputes = storage.rows("dispute_annotations", coder)
@@ -89,15 +89,21 @@ def build_export(
         annotation = current_by_id.get(str(source_row["_annotation_key"]))
         if not annotation or annotation["status"] != "submitted":
             continue
+        payload = json.loads(annotation["payload_json"])
+        if not is_structurally_compatible_utterance(payload):
+            continue
         row = {key: (None if pd.isna(value) else value) for key, value in source_row.items() if key in source_columns}
         row["export_schema_id"] = active_schema_id
         row["export_schema_hash"] = active_schema_hash
-        payload = json.loads(annotation["payload_json"])
         for key in schema_columns + list(AUDIT_EXPORT_COLUMNS):
             row[key] = _flatten(payload.get(key))
         decision = dispute_by_id.get(str(source_row["dispute_id"]), {})
         if "C_primary_dispute_object" in schema_columns:
-            row["C_primary_dispute_object"] = decision.get("C_primary_dispute_object")
+            row["C_primary_dispute_object"] = (
+                decision.get("C_primary_dispute_object")
+                if is_current_dispute_decision(decision, set(dispute_objects))
+                else None
+            )
         row.update(
             {
                 "coder_id": coder,
@@ -130,9 +136,20 @@ def write_export(
     active_schema_id: str,
     active_schema_hash: str,
     schema_fields: Sequence[str],
+    dispute_objects: Sequence[str],
 ) -> Path:
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / safe_export_name(coder)
-    path.write_bytes(build_export(storage, dataset, coder, active_schema_id, active_schema_hash, schema_fields))
+    path.write_bytes(
+        build_export(
+            storage,
+            dataset,
+            coder,
+            active_schema_id,
+            active_schema_hash,
+            schema_fields,
+            dispute_objects,
+        )
+    )
     return path

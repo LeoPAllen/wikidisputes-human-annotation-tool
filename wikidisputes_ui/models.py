@@ -12,8 +12,9 @@ BASE_BINARY = (
     "C_interpersonal_attack_or_disrespect",
     "C_formal_governance_action",
 )
-KS_FIELDS = ("KS_claim_present", "KS_evidence_reference", "KS_reasoning", "KS_restaking")
-KI_FIELDS = ("KI_solicit_feedback", "KI_compromise_position")
+KS_FIELDS = ("KS_explicit_reasoning", "KS_grounding", "KS_restaking", "KS_bounding")
+KI_FIELDS: tuple[str, ...] = ()
+CURRENT_UTTERANCE_SCHEMA_FIELDS = BASE_BINARY + KS_FIELDS
 ANNOTATION_FIELDS = (
     BASE_BINARY
     + KS_FIELDS
@@ -46,13 +47,20 @@ def applicable_fields(values: dict[str, Any], context: ContextState | None = Non
     del context, low_threshold
     applicable = set(BASE_BINARY) | {"malformed_utterance", "coder_confidence", "review_flag", "coder_notes"}
     if values.get("malformed_utterance") is True:
-        applicable.update(KS_FIELDS + KI_FIELDS)
+        applicable.update(KS_FIELDS)
         return applicable
     if values.get("KS_present") == 1:
         applicable.update(KS_FIELDS)
-    if values.get("KI_present") == 1:
-        applicable.update(KI_FIELDS)
     return applicable
+
+
+def is_structurally_compatible_utterance(payload: dict[str, Any]) -> bool:
+    """Return whether a stored payload contains every current utterance schema key."""
+    return all(name in payload for name in CURRENT_UTTERANCE_SCHEMA_FIELDS)
+
+
+def is_current_dispute_decision(payload: dict[str, Any], allowed_values: set[str]) -> bool:
+    return payload.get("C_primary_dispute_object") in allowed_values
 
 
 def normalize_and_validate(
@@ -74,13 +82,11 @@ def normalize_and_validate(
         required.update(BASE_BINARY)
     if payload["malformed_utterance"] is not True and payload["KS_present"] == 1:
         required.update(KS_FIELDS)
-    if payload["malformed_utterance"] is not True and payload["KI_present"] == 1:
-        required.update(KI_FIELDS)
     if require_complete:
         for name in required:
             if name not in answered_fields or payload.get(name) is None:
                 errors[name] = "An explicit response is required."
-    for name in BASE_BINARY + KS_FIELDS + KI_FIELDS + ("review_flag",):
+    for name in BASE_BINARY + KS_FIELDS + ("review_flag",):
         if payload.get(name) is not None and payload[name] not in (0, 1):
             errors[name] = "Choose No or Yes."
     if type(payload.get("malformed_utterance")) is not bool:

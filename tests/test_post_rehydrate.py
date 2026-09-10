@@ -3,7 +3,6 @@ from __future__ import annotations
 from io import BytesIO
 import json
 from pathlib import Path
-import shutil
 
 from openpyxl import load_workbook
 import pandas as pd
@@ -45,7 +44,18 @@ def save(storage: Storage, uid: str, *, saved: str = "2026-01-01T00:00:00Z", mar
         coder="coder_1",
         utterance_id=uid,
         dispute_id="D1",
-        payload={"KS_present": marker, "malformed_utterance": False},
+        payload={
+            "KS_present": marker,
+            "KS_explicit_reasoning": None,
+            "KS_grounding": None,
+            "KS_restaking": None,
+            "KS_bounding": None,
+            "KI_present": 0,
+            "C_off_topic_shift": 0,
+            "C_interpersonal_attack_or_disrespect": 0,
+            "C_formal_governance_action": 0,
+            "malformed_utterance": False,
+        },
         answered_fields={"KS_present", "malformed_utterance"},
         submit=True,
         schema_version="old",
@@ -103,14 +113,14 @@ def test_add_remove_and_collapse_preserve_work(tmp_path: Path) -> None:
     assert storage.current_utterance("coder_1", "new") is None
     assert storage.current_utterance("coder_1", "removed") is not None
     assert storage.rows("utterance_annotation_events", "coder_1") == before_events
-    exported = pd.read_excel(BytesIO(build_export(storage, current, "coder_1", "new", "new-hash", ("KS_present",))))
+    exported = pd.read_excel(BytesIO(build_export(storage, current, "coder_1", "new", "new-hash", ("KS_present",), ())))
     assert list(exported["utterance_id"]) == ["current"]
 
 
-def test_changed_codebook_bytes_register_normally(tmp_path: Path) -> None:
-    original = Path("data/source/codebook.xlsx")
-    changed = tmp_path / "codebook.xlsx"
-    shutil.copy2(original, changed)
+def test_changed_codebook_bytes_register_normally(tmp_path: Path, synthetic_project) -> None:
+    original = synthetic_project.codebook_path
+    changed = tmp_path / "changed-codebook.xlsx"
+    changed.write_bytes(original.read_bytes())
     workbook = load_workbook(changed)
     sheet = workbook["Core_Schema"]
     sheet.cell(row=2, column=4).value = f"{sheet.cell(row=2, column=4).value} "
@@ -145,5 +155,5 @@ def test_malformed_flag_persists_exports_and_allows_missing_constructs(tmp_path:
     assert current["payload"]["malformed_utterance"] is True
     assert json.loads(event["payload_json"])["malformed_utterance"] is True
     source = dataset([row("current-id", 1, "bad", original="stable")])
-    exported = pd.read_excel(BytesIO(build_export(storage, source, "coder_1", "schema", "hash", ())))
+    exported = pd.read_excel(BytesIO(build_export(storage, source, "coder_1", "schema", "hash", (), ())))
     assert bool(exported.loc[0, "malformed_utterance"])

@@ -15,32 +15,29 @@ CODEBOOK_COLUMNS = (
     "Indicator",
     "Definition",
     "Coding rule",
-    "Example (raw text + explanation)",
-    "Example provenance",
+    "Example (verbatim excerpt + explanation)",
+    "Example provenance (WikiDisputes; stable identifiers where available)",
+    "question",
 )
 EXPECTED_LABELS = (
     "KS_present",
-    "KS_claim_present",
-    "KS_evidence_reference",
-    "KS_reasoning",
+    "KS_explicit_reasoning",
+    "KS_grounding",
     "KS_restaking",
+    "KS_bounding",
     "KI_present",
-    "KI_solicit_feedback",
-    "KI_compromise_position",
     "C_off_topic_shift",
     "C_interpersonal_attack_or_disrespect",
     "C_formal_governance_action",
     "C_primary_dispute_object",
 )
 EXPECTED_DISPUTE_OBJECTS = (
-    "wording_or_framing",
-    "source_or_evidence",
-    "factual_accuracy",
-    "neutrality_or_balance",
-    "scope_relevance_or_due_weight",
-    "article_structure_or_location",
-    "visual_or_media_content",
-    "mixed_or_unclear",
+    "claim_or_evidence_validity",
+    "wording_or_representation",
+    "inclusion_or_weight",
+    "placement_or_structure",
+    "mixed",
+    "uncertain",
 )
 
 
@@ -53,6 +50,7 @@ class FieldGuide:
     rule: str
     example: str
     example_provenance: str = ""
+    question: str = ""
 
 
 @dataclass(frozen=True)
@@ -75,19 +73,28 @@ def schema_id(file_hash: str) -> str:
     return f"schema-{file_hash[:12]}"
 
 
-def _parse_dispute_objects(rule: str) -> dict[str, str]:
-    parsed: dict[str, str] = {}
-    pattern = re.compile(r"^\s*[•*-]\s*([a-z][a-z0-9_]*)\s*[—–-]\s*(.+?)\s*$")
+def _parse_dispute_objects(indicator: str, rule: str) -> dict[str, str]:
+    enum = re.search(r"\{([^{}]+)\}", indicator)
+    if enum is None:
+        raise ValueError("C_primary_dispute_object Indicator must contain an enum in braces.")
+    values = tuple(value.strip() for value in enum.group(1).split(","))
+    if values != EXPECTED_DISPUTE_OBJECTS:
+        raise ValueError(
+            "C_primary_dispute_object Indicator must define exactly these values in order: "
+            + ", ".join(EXPECTED_DISPUTE_OBJECTS)
+        )
+    descriptions: dict[str, str] = {}
+    pattern = re.compile(r"^\s*[•*-]\s*([a-z][a-z0-9_]*)\s*:\s*(.+?)\s*$")
     for line in rule.splitlines():
         match = pattern.match(line)
         if match:
-            parsed[match.group(1)] = match.group(2).rstrip(".")
-    if tuple(parsed) != EXPECTED_DISPUTE_OBJECTS:
-        raise ValueError(
-            "C_primary_dispute_object coding rule must define exactly these values in order: "
-            + ", ".join(EXPECTED_DISPUTE_OBJECTS)
-        )
-    return parsed
+            key = match.group(1)
+            if key not in values:
+                raise ValueError(f"C_primary_dispute_object coding rule has unknown value: {key}")
+            if key in descriptions:
+                raise ValueError(f"C_primary_dispute_object coding rule repeats value: {key}")
+            descriptions[key] = match.group(2).strip()
+    return {value: descriptions.get(value, "") for value in values}
 
 
 def load_codebook(path: str | Path, schema_sheet: str = "Core_Schema") -> Codebook:
@@ -101,6 +108,8 @@ def load_codebook(path: str | Path, schema_sheet: str = "Core_Schema") -> Codebo
     missing = [column for column in CODEBOOK_COLUMNS if column not in schema.columns]
     if missing:
         raise ValueError(f"{schema_sheet}: missing columns: {', '.join(missing)}")
+    if tuple(schema.columns) != CODEBOOK_COLUMNS:
+        raise ValueError(f"{schema_sheet}: columns must exactly match the supported names and order.")
     labels = [_clean(value) for value in schema["Label"]]
     if any(not label for label in labels):
         raise ValueError("Codebook labels must be nonblank.")
@@ -109,6 +118,9 @@ def load_codebook(path: str | Path, schema_sheet: str = "Core_Schema") -> Codebo
         raise ValueError(f"Duplicate codebook labels: {', '.join(duplicates)}")
     if tuple(labels) != EXPECTED_LABELS:
         raise ValueError("Codebook labels must exactly match the supported label set and display order.")
+    questions = [_clean(value) for value in schema["question"]]
+    if any(not question for question in questions):
+        raise ValueError("Codebook questions must be nonblank for every schema row.")
     fields: dict[str, FieldGuide] = {}
     for _, row in schema.iterrows():
         label = _clean(row["Label"])
@@ -118,8 +130,10 @@ def load_codebook(path: str | Path, schema_sheet: str = "Core_Schema") -> Codebo
             _clean(row["Indicator"]),
             _clean(row["Definition"]),
             _clean(row["Coding rule"]),
-            _clean(row["Example (raw text + explanation)"]),
-            _clean(row["Example provenance"]),
+            _clean(row["Example (verbatim excerpt + explanation)"]),
+            _clean(row["Example provenance (WikiDisputes; stable identifiers where available)"]),
+            _clean(row["question"]),
         )
-    objects = _parse_dispute_objects(fields["C_primary_dispute_object"].rule)
+    dispute_field = fields["C_primary_dispute_object"]
+    objects = _parse_dispute_objects(dispute_field.indicator, dispute_field.rule)
     return Codebook(fields, objects, file_fingerprint(path), path.name)

@@ -13,7 +13,14 @@ from wikidisputes_ui.codebook import file_fingerprint, load_codebook, schema_id
 from wikidisputes_ui.config import load_config
 from wikidisputes_ui.export import build_export, safe_export_name
 from wikidisputes_ui.ingest import article_title, read_gold
-from wikidisputes_ui.models import BASE_BINARY, KI_FIELDS, KS_FIELDS, applicable_fields, normalize_and_validate
+from wikidisputes_ui.models import (
+    BASE_BINARY,
+    KS_FIELDS,
+    applicable_fields,
+    is_current_dispute_decision,
+    is_structurally_compatible_utterance,
+    normalize_and_validate,
+)
 from wikidisputes_ui.navigation import dispute_destination, dispute_progress, previous_utterance
 from wikidisputes_ui.source_migration import reconcile_annotation_keys
 from wikidisputes_ui.storage import Storage
@@ -86,17 +93,36 @@ if coder is None:
 frame = dataset.annotatable_rows
 all_ids = set(frame["_annotation_key"].astype(str))
 current_rows = storage.rows("utterance_annotations", coder)
-submitted = {
-    str(r["utterance_id"]): r for r in current_rows if r["status"] == "submitted" and str(r["utterance_id"]) in all_ids
-}
+submitted = {}
+for annotation_row in current_rows:
+    payload = json.loads(annotation_row["payload_json"])
+    if (
+        annotation_row["status"] == "submitted"
+        and str(annotation_row["utterance_id"]) in all_ids
+        and is_structurally_compatible_utterance(payload)
+    ):
+        submitted[str(annotation_row["utterance_id"])] = annotation_row
 dispute_rows = storage.rows("dispute_annotations", coder)
-completed_disputes = {str(r["dispute_id"]) for r in dispute_rows}
+allowed_dispute_objects = set(codebook.dispute_objects)
+completed_disputes = {
+    str(r["dispute_id"])
+    for r in dispute_rows
+    if is_current_dispute_decision(json.loads(r["payload_json"]), allowed_dispute_objects)
+}
 
 st.sidebar.caption(f"Coder: **{coder}**")
 st.sidebar.caption(f"Schema: **{active_schema_id}**")
 st.sidebar.download_button(
     "Export my annotations",
-    build_export(storage, dataset, coder, active_schema_id, codebook.file_hash, tuple(codebook.fields)),
+    build_export(
+        storage,
+        dataset,
+        coder,
+        active_schema_id,
+        codebook.file_hash,
+        tuple(codebook.fields),
+        tuple(codebook.dispute_objects),
+    ),
     safe_export_name(coder),
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 )
@@ -209,13 +235,13 @@ if st.session_state.page == "dispute":
     tasks = TaskCounter()
     task_intro(
         tasks,
-        "Which article issue mainly organizes this dispute?",
+        codebook.fields["C_primary_dispute_object"].question,
         codebook.fields["C_primary_dispute_object"],
         controlled_values=codebook.dispute_objects,
     )
     options = list(codebook.dispute_objects)
     choice = st.radio(
-        "C_primary_dispute_object",
+        codebook.fields["C_primary_dispute_object"].question,
         options,
         index=options.index(existing["C_primary_dispute_object"])
         if existing.get("C_primary_dispute_object") in options
@@ -315,19 +341,6 @@ with reading.container(height=650, border=False, key="utterance_reading_pane"):
                 badges += classifications or ("Neither KS nor KI",)
         prior_comment(turn, badges)
 
-PROMPTS = {
-    "KS_present": "Does this utterance state or challenge knowledge about the article or dispute?",
-    "KS_claim_present": "Does it make a substantive claim?",
-    "KS_evidence_reference": "Does it directly refer to evidence or another supporting basis?",
-    "KS_reasoning": "Does it connect evidence or a premise to a conclusion?",
-    "KS_restaking": "Does it repeat an earlier claim or objection without adding evidence or reasoning?",
-    "KI_present": "Does this utterance coordiante, propose, report, or refine an article edit?",
-    "KI_solicit_feedback": "Does it ask others to assess, revise, or accept that edit?",
-    "KI_compromise_position": "Does the edit visibly accommodate at least two positions or concerns?",
-    "C_off_topic_shift": "Does this shift away from the article dispute?",
-    "C_interpersonal_attack_or_disrespect": "Does this attack or disrespect another contributor?",
-    "C_formal_governance_action": "Does this invoke or threaten a formal governance action?",
-}
 with coding.container(height=430, border=False, key="utterance_coding_pane"):
     values = dict(defaults)
     answered = set() if current is None else set(current["answered_fields"])
@@ -341,16 +354,15 @@ with coding.container(height=430, border=False, key="utterance_coding_pane"):
     answered.add("malformed_utterance")
 
     def ask(name: str) -> None:
-        values[name] = binary_task(
-            tasks, PROMPTS[name], codebook.fields[name], f"answer_{name}_{uid}", values.get(name)
-        )
+        question = codebook.fields[name].question
+        values[name] = binary_task(tasks, question, codebook.fields[name], f"answer_{name}_{uid}", values.get(name))
         if values[name] is None:
             answered.discard(name)
         else:
             answered.add(name)
 
     if values["malformed_utterance"]:
-        for name in BASE_BINARY + KS_FIELDS + KI_FIELDS:
+        for name in BASE_BINARY + KS_FIELDS:
             widget_key = f"answer_{name}_{uid}"
             if widget_key in st.session_state:
                 values[name] = st.session_state[widget_key]
@@ -369,15 +381,6 @@ with coding.container(height=430, border=False, key="utterance_coding_pane"):
                 values[name] = None
                 answered.discard(name)
         ask("KI_present")
-        if values["KI_present"] == 1:
-            with st.container(border=True):
-                st.caption("Knowledge integration details")
-                for name in KI_FIELDS:
-                    ask(name)
-        else:
-            for name in KI_FIELDS:
-                values[name] = None
-                answered.discard(name)
         for name in BASE_BINARY[2:]:
             ask(name)
     task_intro(tasks, "How confident are you in this utterance annotation?", description="Choose 1 through 5.")
@@ -426,7 +429,8 @@ with coding:
         result = normalize_and_validate(values, answered)
         if not result.valid:
             for name in result.errors:
-                st.error(f"Please answer: {PROMPTS.get(name, name)}")
+                question = codebook.fields[name].question if name in codebook.fields else name
+                st.error(f"Please answer: {question}")
         else:
             storage.save_utterance(
                 coder=coder,

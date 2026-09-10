@@ -24,13 +24,11 @@ ARTICLE_COLUMNS = ("article_title", "source_page_title", "dispute_label")
 ANNOTATION_COLUMNS = {
     "coder_id",
     "KS_present",
-    "KS_claim_present",
-    "KS_evidence_reference",
-    "KS_reasoning",
+    "KS_explicit_reasoning",
+    "KS_grounding",
     "KS_restaking",
+    "KS_bounding",
     "KI_present",
-    "KI_solicit_feedback",
-    "KI_compromise_position",
     "C_off_topic_shift",
     "C_interpersonal_attack_or_disrespect",
     "C_formal_governance_action",
@@ -43,6 +41,11 @@ ANNOTATION_COLUMNS = {
 
 # The immutable source workbook may retain blank columns from earlier schemas.
 LEGACY_ANNOTATION_COLUMNS = {
+    "KS_claim_present",
+    "KS_evidence_reference",
+    "KS_reasoning",
+    "KI_solicit_feedback",
+    "KI_compromise_position",
     "KS_problem_claim_specified",
     "KS_warrant_explicit",
     "KS_acceptability_condition",

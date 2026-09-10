@@ -1,6 +1,13 @@
 import pytest
 
-from wikidisputes_ui.models import KI_FIELDS, KS_FIELDS, applicable_fields, normalize_and_validate
+from wikidisputes_ui.models import (
+    CURRENT_UTTERANCE_SCHEMA_FIELDS,
+    KI_FIELDS,
+    KS_FIELDS,
+    applicable_fields,
+    is_structurally_compatible_utterance,
+    normalize_and_validate,
+)
 
 
 def base(**changes):
@@ -19,27 +26,39 @@ def base(**changes):
 
 
 def test_ks_and_ki_are_independent_and_can_cooccur():
-    values = base(KS_present=1, KI_present=1, **{name: 0 for name in KS_FIELDS + KI_FIELDS})
+    values = base(KS_present=1, KI_present=1, **{name: 0 for name in KS_FIELDS})
     result = normalize_and_validate(values, set(values))
     assert result.valid
-    assert set(KS_FIELDS + KI_FIELDS) <= applicable_fields(values)
+    assert set(KS_FIELDS) <= applicable_fields(values)
+    assert KI_FIELDS == ()
 
 
-@pytest.mark.parametrize("parent,children", [("KS_present", KS_FIELDS), ("KI_present", KI_FIELDS)])
-def test_parent_no_clears_children_and_answered_state(parent, children):
-    values = base(**{parent: 0}, **{name: 1 for name in children})
+def test_ks_parent_no_clears_children_and_answered_state():
+    values = base(KS_present=0, **{name: 1 for name in KS_FIELDS})
     answered = set(values)
     result = normalize_and_validate(values, answered)
-    assert all(result.payload[name] is None for name in children)
-    assert not set(children) & answered
+    assert all(result.payload[name] is None for name in KS_FIELDS)
+    assert not set(KS_FIELDS) & answered
 
 
-def test_ks_restaking_is_required_and_not_derived():
-    values = base(KS_present=1, KS_claim_present=1, KS_evidence_reference=0, KS_reasoning=0)
+def test_four_ks_children_are_required_and_restaking_coexists():
+    values = base(KS_present=1, KS_explicit_reasoning=1, KS_grounding=1, KS_bounding=0)
     result = normalize_and_validate(values, set(values))
     assert result.errors == {"KS_restaking": "An explicit response is required."}
-    values["KS_restaking"] = 0
-    assert normalize_and_validate(values, set(values)).payload["KS_restaking"] == 0
+    values["KS_restaking"] = 1
+    result = normalize_and_validate(values, set(values))
+    assert result.valid
+    assert (
+        result.payload["KS_restaking"] == result.payload["KS_explicit_reasoning"] == result.payload["KS_grounding"] == 1
+    )
+
+
+def test_structural_compatibility_requires_current_keys_not_hashes():
+    payload = {name: None for name in CURRENT_UTTERANCE_SCHEMA_FIELDS}
+    assert is_structurally_compatible_utterance(payload)
+    payload.pop("KS_bounding")
+    payload["KS_reasoning"] = 1
+    assert not is_structurally_compatible_utterance(payload)
 
 
 @pytest.mark.parametrize("value", [0, 6, 2.0, "3"])
@@ -54,6 +73,7 @@ def test_review_is_explicit_and_comment_optional():
     assert result.payload["coder_notes"] is None
 
 
-def test_binary_values_reject_nonbinary_compromise():
-    values = base(KI_present=1, KI_solicit_feedback=0, KI_compromise_position=2)
-    assert "KI_compromise_position" in normalize_and_validate(values, set(values)).errors
+def test_binary_values_reject_nonbinary_ks_child():
+    values = base(KS_present=1, **{name: 0 for name in KS_FIELDS})
+    values["KS_bounding"] = 2
+    assert "KS_bounding" in normalize_and_validate(values, set(values)).errors

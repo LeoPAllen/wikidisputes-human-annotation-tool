@@ -4,7 +4,47 @@ import pandas as pd
 import pytest
 
 from wikidisputes_ui.config import ProjectConfig
+from wikidisputes_ui.codebook import EXPECTED_DISPUTE_OBJECTS, EXPECTED_LABELS
 from wikidisputes_ui.ingest import ANNOTATION_COLUMNS
+
+QUESTIONS = {
+    "KS_present": "Does this utterance stake knowledge?",
+    "KS_explicit_reasoning": "Does it make its reasoning explicit?",
+    "KS_grounding": "Does it ground its position?",
+    "KS_restaking": "Does it restate an earlier position?",
+    "KS_bounding": "Does it bound the claim?",
+    "KI_present": "Does this utterance integrate knowledge?",
+    "C_off_topic_shift": "Does this shift off topic?",
+    "C_interpersonal_attack_or_disrespect": "Does this attack or disrespect a contributor?",
+    "C_formal_governance_action": "Does this invoke formal governance?",
+    "C_primary_dispute_object": "Which object primarily organizes this dispute?",
+}
+
+
+@pytest.fixture
+def codebook_frame():
+    rows = []
+    for label in EXPECTED_LABELS:
+        indicator = "binary {0,1}"
+        rule = f"Coding rule for {label}."
+        if label in {"KS_explicit_reasoning", "KS_grounding", "KS_restaking", "KS_bounding"}:
+            indicator += "; null if KS_present=0"
+        if label == "C_primary_dispute_object":
+            indicator = "single-label enum {" + ", ".join(EXPECTED_DISPUTE_OBJECTS) + "}; dispute-level"
+            rule = "\n".join(f"• {value}: Description for {value}." for value in EXPECTED_DISPUTE_OBJECTS[:-1])
+        rows.append(
+            {
+                "Family": "Dispute Context" if label == "C_primary_dispute_object" else "Synthetic",
+                "Label": label,
+                "Indicator": indicator,
+                "Definition": f"Definition for {label}.",
+                "Coding rule": rule,
+                "Example (verbatim excerpt + explanation)": f"Example for {label}.",
+                "Example provenance (WikiDisputes; stable identifiers where available)": "Synthetic fixture",
+                "question": QUESTIONS[label],
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 @pytest.fixture
@@ -54,12 +94,14 @@ def source_rows():
 
 
 @pytest.fixture
-def synthetic_project(tmp_path: Path, source_rows):
+def synthetic_project(tmp_path: Path, source_rows, codebook_frame):
     unified = source_rows
     gold = tmp_path / "gold.xlsx"
     with pd.ExcelWriter(gold, engine="openpyxl") as writer:
         unified.to_excel(writer, sheet_name="Gold_Annotation", index=False)
-    codebook = Path("data/source/codebook.xlsx").resolve()
+    codebook = tmp_path / "codebook.xlsx"
+    with pd.ExcelWriter(codebook, engine="openpyxl") as writer:
+        codebook_frame.to_excel(writer, sheet_name="Core_Schema", index=False)
     return ProjectConfig(
         root=tmp_path,
         gold_path=gold,
