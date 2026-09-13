@@ -20,23 +20,29 @@ sidebar exports only the active coder.
 ## Schema and workflow
 
 `data/source/codebook.xlsx` has exactly one authoritative worksheet, `Core_Schema`. Questions, definitions, coding
-rules, examples, provenance, and dispute-object values/descriptions are read from it. The whole-file SHA-256 remains
-audit metadata, while structural payload compatibility controls progress and export.
+rules, examples, provenance, and dispute-object values/descriptions are read from it, including the exact `Question`
+column. The whole-file SHA-256 remains audit metadata, while structural payload compatibility controls progress and
+export.
 
 Each opened dispute uses one continuous utterance screen. Five always-applicable questions have explicit No/Yes
-answers and no default. Answering Yes to KS reveals four inline KS questions; KI is a standalone, independent field.
+answers and no default. Answering Yes to KS reveals its inline KS questions; `KS_new_evidence` is required only when
+`KS_grounding` is Yes. KI is a standalone, independent field.
 `KS_restaking` is entered by the coder from the visible earlier discussion and is not derived. Changing KS to No hides
 its children; normalized storage uses null for those inapplicable answers.
 
 Each utterance has exactly one required confidence response (1–5), one required review flag, and one optional comment.
-After every substantive utterance in a dispute is submitted, the workflow shows only the final
-`C_primary_dispute_object` decision. Its six values come from the codebook Indicator enum; matching descriptions are
-parsed from the coding rule when present.
+After every substantive utterance in a dispute is submitted, the workflow shows the final
+`C_primary_dispute_object` and `DV_dispute_resolution` decisions. Both are required; resolution is an integer from 1
+through 5. Dispute-object values come from the codebook Indicator enum; matching descriptions are parsed from the
+coding rule when present.
 
 The Excel export contains only submitted substantive rows with all current utterance schema keys. It propagates only a
-current-valid dispute object, emits inapplicable nulls as blank cells, uses nullable integers for binary/audit values,
-excludes legacy gold annotations and obsolete schema fields, and retains source identifiers plus audit provenance.
+current-valid dispute decision in both columns, emits inapplicable nulls as blank cells, uses nullable integers for
+binary, resolution, and audit values, excludes legacy gold annotations and obsolete schema fields, and retains source
+identifiers plus audit provenance.
 Historical SQLite event payloads remain unchanged and available in database backups.
+Older utterance records missing `KS_new_evidence` require re-review; older dispute records missing a valid resolution
+require completion. Existing event history is retained.
 
 To update inputs, replace `data/source/gold_input.xlsx` and/or `data/source/codebook.xlsx`, then restart Streamlit.
 Annotations follow the Gold stable utterance key, so source edits and reordering do not reset SQLite. Coders may mark a

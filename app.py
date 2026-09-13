@@ -248,15 +248,28 @@ if st.session_state.page == "dispute":
         else None,
         format_func=lambda value: value.replace("_", " ").capitalize(),
     )
+    task_intro(tasks, codebook.fields["DV_dispute_resolution"].question, codebook.fields["DV_dispute_resolution"])
+    resolution_options = list(range(1, 6))
+    resolution = st.radio(
+        codebook.fields["DV_dispute_resolution"].question,
+        resolution_options,
+        index=resolution_options.index(existing["DV_dispute_resolution"])
+        if type(existing.get("DV_dispute_resolution")) is int
+        and existing["DV_dispute_resolution"] in resolution_options
+        else None,
+        horizontal=True,
+    )
     if st.button("Complete dispute", type="primary"):
-        if choice is None:
-            st.error("Choose exactly one article issue.")
+        if not is_current_dispute_decision(
+            {"C_primary_dispute_object": choice, "DV_dispute_resolution": resolution}, allowed_dispute_objects
+        ):
+            st.error("Answer both dispute questions.")
         else:
             storage.save_dispute(
                 coder=coder,
                 dispute_id=did,
-                payload={"C_primary_dispute_object": choice},
-                answered_fields={"C_primary_dispute_object"},
+                payload={"C_primary_dispute_object": choice, "DV_dispute_resolution": resolution},
+                answered_fields={"C_primary_dispute_object", "DV_dispute_resolution"},
                 schema_version=active_schema_id,
                 schema_hash=codebook.file_hash,
                 opened_at=opened_at(),
@@ -375,7 +388,11 @@ with coding.container(height=430, border=False, key="utterance_coding_pane"):
             with st.container(border=True):
                 st.caption("Knowledge staking details")
                 for name in KS_FIELDS:
-                    ask(name)
+                    if name == "KS_new_evidence" and values.get("KS_grounding") != 1:
+                        values[name] = None
+                        answered.discard(name)
+                    else:
+                        ask(name)
         else:
             for name in KS_FIELDS:
                 values[name] = None

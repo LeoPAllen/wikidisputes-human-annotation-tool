@@ -23,6 +23,7 @@ INTEGER_COLUMNS = {
     "KS_present",
     "KS_explicit_reasoning",
     "KS_grounding",
+    "KS_new_evidence",
     "KS_restaking",
     "KS_bounding",
     "KI_present",
@@ -31,6 +32,7 @@ INTEGER_COLUMNS = {
     "C_formal_governance_action",
     "coder_confidence",
     "review_flag",
+    "DV_dispute_resolution",
     "revision_number",
 }
 
@@ -98,12 +100,10 @@ def build_export(
         for key in schema_columns + list(AUDIT_EXPORT_COLUMNS):
             row[key] = _flatten(payload.get(key))
         decision = dispute_by_id.get(str(source_row["dispute_id"]), {})
-        if "C_primary_dispute_object" in schema_columns:
-            row["C_primary_dispute_object"] = (
-                decision.get("C_primary_dispute_object")
-                if is_current_dispute_decision(decision, set(dispute_objects))
-                else None
-            )
+        current_decision = is_current_dispute_decision(decision, set(dispute_objects))
+        for field in ("C_primary_dispute_object", "DV_dispute_resolution"):
+            if field in schema_columns:
+                row[field] = decision.get(field) if current_decision else None
         row.update(
             {
                 "coder_id": coder,

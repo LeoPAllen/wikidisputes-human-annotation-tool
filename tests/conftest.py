@@ -11,6 +11,7 @@ QUESTIONS = {
     "KS_present": "Does this utterance stake knowledge?",
     "KS_explicit_reasoning": "Does it make its reasoning explicit?",
     "KS_grounding": "Does it ground its position?",
+    "KS_new_evidence": "Does it introduce new evidence?",
     "KS_restaking": "Does it restate an earlier position?",
     "KS_bounding": "Does it bound the claim?",
     "KI_present": "Does this utterance integrate knowledge?",
@@ -18,6 +19,7 @@ QUESTIONS = {
     "C_interpersonal_attack_or_disrespect": "Does this attack or disrespect a contributor?",
     "C_formal_governance_action": "Does this invoke formal governance?",
     "C_primary_dispute_object": "Which object primarily organizes this dispute?",
+    "DV_dispute_resolution": "How resolved is this dispute?",
 }
 
 
@@ -29,9 +31,13 @@ def codebook_frame():
         rule = f"Coding rule for {label}."
         if label in {"KS_explicit_reasoning", "KS_grounding", "KS_restaking", "KS_bounding"}:
             indicator += "; null if KS_present=0"
+        if label == "KS_new_evidence":
+            indicator += "; null if KS_grounding=0"
         if label == "C_primary_dispute_object":
             indicator = "single-label enum {" + ", ".join(EXPECTED_DISPUTE_OBJECTS) + "}; dispute-level"
             rule = "\n".join(f"• {value}: Description for {value}." for value in EXPECTED_DISPUTE_OBJECTS[:-1])
+        if label == "DV_dispute_resolution":
+            indicator = "ordinal {1,2,3,4,5}; dispute-level"
         rows.append(
             {
                 "Family": "Dispute Context" if label == "C_primary_dispute_object" else "Synthetic",
@@ -41,7 +47,7 @@ def codebook_frame():
                 "Coding rule": rule,
                 "Example (verbatim excerpt + explanation)": f"Example for {label}.",
                 "Example provenance (WikiDisputes; stable identifiers where available)": "Synthetic fixture",
-                "question": QUESTIONS[label],
+                "Question": QUESTIONS[label],
             }
         )
     return pd.DataFrame(rows)

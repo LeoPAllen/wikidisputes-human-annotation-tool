@@ -17,12 +17,13 @@ CODEBOOK_COLUMNS = (
     "Coding rule",
     "Example (verbatim excerpt + explanation)",
     "Example provenance (WikiDisputes; stable identifiers where available)",
-    "question",
+    "Question",
 )
 EXPECTED_LABELS = (
     "KS_present",
     "KS_explicit_reasoning",
     "KS_grounding",
+    "KS_new_evidence",
     "KS_restaking",
     "KS_bounding",
     "KI_present",
@@ -30,6 +31,7 @@ EXPECTED_LABELS = (
     "C_interpersonal_attack_or_disrespect",
     "C_formal_governance_action",
     "C_primary_dispute_object",
+    "DV_dispute_resolution",
 )
 EXPECTED_DISPUTE_OBJECTS = (
     "claim_or_evidence_validity",
@@ -118,7 +120,7 @@ def load_codebook(path: str | Path, schema_sheet: str = "Core_Schema") -> Codebo
         raise ValueError(f"Duplicate codebook labels: {', '.join(duplicates)}")
     if tuple(labels) != EXPECTED_LABELS:
         raise ValueError("Codebook labels must exactly match the supported label set and display order.")
-    questions = [_clean(value) for value in schema["question"]]
+    questions = [_clean(value) for value in schema["Question"]]
     if any(not question for question in questions):
         raise ValueError("Codebook questions must be nonblank for every schema row.")
     fields: dict[str, FieldGuide] = {}
@@ -132,7 +134,7 @@ def load_codebook(path: str | Path, schema_sheet: str = "Core_Schema") -> Codebo
             _clean(row["Coding rule"]),
             _clean(row["Example (verbatim excerpt + explanation)"]),
             _clean(row["Example provenance (WikiDisputes; stable identifiers where available)"]),
-            _clean(row["question"]),
+            _clean(row["Question"]),
         )
     dispute_field = fields["C_primary_dispute_object"]
     objects = _parse_dispute_objects(dispute_field.indicator, dispute_field.rule)

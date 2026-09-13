@@ -5,6 +5,7 @@ from wikidisputes_ui.models import (
     KI_FIELDS,
     KS_FIELDS,
     applicable_fields,
+    is_current_dispute_decision,
     is_structurally_compatible_utterance,
     normalize_and_validate,
 )
@@ -29,7 +30,8 @@ def test_ks_and_ki_are_independent_and_can_cooccur():
     values = base(KS_present=1, KI_present=1, **{name: 0 for name in KS_FIELDS})
     result = normalize_and_validate(values, set(values))
     assert result.valid
-    assert set(KS_FIELDS) <= applicable_fields(values)
+    assert set(KS_FIELDS) - {"KS_new_evidence"} <= applicable_fields(values)
+    assert "KS_new_evidence" not in applicable_fields(values)
     assert KI_FIELDS == ()
 
 
@@ -41,15 +43,39 @@ def test_ks_parent_no_clears_children_and_answered_state():
     assert not set(KS_FIELDS) & answered
 
 
-def test_four_ks_children_are_required_and_restaking_coexists():
+def test_grounded_ks_requires_new_evidence_and_restaking_coexists():
     values = base(KS_present=1, KS_explicit_reasoning=1, KS_grounding=1, KS_bounding=0)
     result = normalize_and_validate(values, set(values))
-    assert result.errors == {"KS_restaking": "An explicit response is required."}
+    assert result.errors == {
+        "KS_restaking": "An explicit response is required.",
+        "KS_new_evidence": "An explicit response is required.",
+    }
     values["KS_restaking"] = 1
+    values["KS_new_evidence"] = 0
     result = normalize_and_validate(values, set(values))
     assert result.valid
     assert (
         result.payload["KS_restaking"] == result.payload["KS_explicit_reasoning"] == result.payload["KS_grounding"] == 1
+    )
+
+
+def test_new_evidence_is_null_without_grounding():
+    values = base(KS_present=1, **{name: 1 for name in KS_FIELDS})
+    values["KS_grounding"] = 0
+    answered = set(values)
+    result = normalize_and_validate(values, answered)
+    assert result.valid
+    assert result.payload["KS_new_evidence"] is None
+    assert "KS_new_evidence" not in answered
+
+
+@pytest.mark.parametrize("value", [None, 0, 6, 2.0, "3", True])
+def test_dispute_requires_integer_resolution(value):
+    assert not is_current_dispute_decision(
+        {"C_primary_dispute_object": "uncertain", "DV_dispute_resolution": value}, {"uncertain"}
+    )
+    assert is_current_dispute_decision(
+        {"C_primary_dispute_object": "uncertain", "DV_dispute_resolution": 3}, {"uncertain"}
     )
 
 

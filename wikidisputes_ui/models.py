@@ -12,7 +12,7 @@ BASE_BINARY = (
     "C_interpersonal_attack_or_disrespect",
     "C_formal_governance_action",
 )
-KS_FIELDS = ("KS_explicit_reasoning", "KS_grounding", "KS_restaking", "KS_bounding")
+KS_FIELDS = ("KS_explicit_reasoning", "KS_grounding", "KS_new_evidence", "KS_restaking", "KS_bounding")
 KI_FIELDS: tuple[str, ...] = ()
 CURRENT_UTTERANCE_SCHEMA_FIELDS = BASE_BINARY + KS_FIELDS
 ANNOTATION_FIELDS = (
@@ -46,11 +46,10 @@ class ValidationResult:
 def applicable_fields(values: dict[str, Any], context: ContextState | None = None, low_threshold: int = 2) -> set[str]:
     del context, low_threshold
     applicable = set(BASE_BINARY) | {"malformed_utterance", "coder_confidence", "review_flag", "coder_notes"}
-    if values.get("malformed_utterance") is True:
-        applicable.update(KS_FIELDS)
-        return applicable
-    if values.get("KS_present") == 1:
-        applicable.update(KS_FIELDS)
+    if values.get("KS_present") == 1 or (values.get("malformed_utterance") is True and values.get("KS_present") != 0):
+        applicable.update(set(KS_FIELDS) - {"KS_new_evidence"})
+        if values.get("KS_grounding") == 1:
+            applicable.add("KS_new_evidence")
     return applicable
 
 
@@ -60,7 +59,12 @@ def is_structurally_compatible_utterance(payload: dict[str, Any]) -> bool:
 
 
 def is_current_dispute_decision(payload: dict[str, Any], allowed_values: set[str]) -> bool:
-    return payload.get("C_primary_dispute_object") in allowed_values
+    resolution = payload.get("DV_dispute_resolution")
+    return (
+        payload.get("C_primary_dispute_object") in allowed_values
+        and type(resolution) is int
+        and resolution in range(1, 6)
+    )
 
 
 def normalize_and_validate(
@@ -81,7 +85,9 @@ def normalize_and_validate(
     if payload["malformed_utterance"] is not True:
         required.update(BASE_BINARY)
     if payload["malformed_utterance"] is not True and payload["KS_present"] == 1:
-        required.update(KS_FIELDS)
+        required.update(set(KS_FIELDS) - {"KS_new_evidence"})
+        if payload["KS_grounding"] == 1:
+            required.add("KS_new_evidence")
     if require_complete:
         for name in required:
             if name not in answered_fields or payload.get(name) is None:

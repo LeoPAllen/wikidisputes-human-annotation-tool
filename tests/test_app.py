@@ -35,6 +35,7 @@ def current_payload(**changes):
         "KS_present": 0,
         "KS_explicit_reasoning": None,
         "KS_grounding": None,
+        "KS_new_evidence": None,
         "KS_restaking": None,
         "KS_bounding": None,
         "KI_present": 0,
@@ -99,6 +100,7 @@ def test_inline_workflow_has_no_stages_and_conditional_children(monkeypatch, syn
     app = app.run()
     labels = {item.label for item in app.radio}
     assert len(set(KS_CHILD_LABELS) & labels) == 4
+    assert "Does it introduce new evidence?" not in labels
     assert not set(OBSOLETE_KI_CHILD_LABELS) & labels
     rendered = " ".join(str(m.value) for m in app.markdown)
     assert "Stage 1" not in rendered and "Stage 2" not in rendered and "Continue to details" not in rendered
@@ -107,7 +109,7 @@ def test_inline_workflow_has_no_stages_and_conditional_children(monkeypatch, syn
 
 def test_question_text_is_loaded_from_workbook(monkeypatch, synthetic_project):
     frame = pd.read_excel(synthetic_project.codebook_path, sheet_name="Core_Schema")
-    frame.loc[frame.Label == "KS_present", "question"] = "Workbook-specific KS wording?"
+    frame.loc[frame.Label == "KS_present", "Question"] = "Workbook-specific KS wording?"
     with pd.ExcelWriter(synthetic_project.codebook_path, engine="openpyxl") as writer:
         frame.to_excel(writer, sheet_name="Core_Schema", index=False)
     app = enter(configured(monkeypatch, synthetic_project))
@@ -224,6 +226,19 @@ def test_parent_change_hides_and_clears_children(monkeypatch, synthetic_project)
     assert not set(KS_CHILD_LABELS) & {item.label for item in app.radio}
 
 
+def test_new_evidence_appears_only_after_grounding_yes(monkeypatch, synthetic_project):
+    app = enter(configured(monkeypatch, synthetic_project))
+    radio(app, "Does this utterance stake knowledge?").set_value(1)
+    app = app.run()
+    assert "Does it introduce new evidence?" not in {item.label for item in app.radio}
+    radio(app, "Does it ground its position?").set_value(1)
+    app = app.run()
+    assert "Does it introduce new evidence?" in {item.label for item in app.radio}
+    radio(app, "Does it ground its position?").set_value(0)
+    app = app.run()
+    assert "Does it introduce new evidence?" not in {item.label for item in app.radio}
+
+
 def test_full_dispute_smoke_and_object_only_payload(monkeypatch, synthetic_project):
     app = enter(configured(monkeypatch, synthetic_project))
     app = answer_all(app)
@@ -232,7 +247,10 @@ def test_full_dispute_smoke_and_object_only_payload(monkeypatch, synthetic_proje
     app = answer_all(app, ks=1, ki=1)
     app = next(b for b in app.button if b.label == "Submit and next").click().run()
     assert app.title[0].value == "Final dispute decision"
-    assert [item.label for item in app.radio] == ["Which object primarily organizes this dispute?"]
+    assert [item.label for item in app.radio] == [
+        "Which object primarily organizes this dispute?",
+        "How resolved is this dispute?",
+    ]
     assert app.radio[0].options == [
         "Claim or evidence validity",
         "Wording or representation",
@@ -243,13 +261,17 @@ def test_full_dispute_smoke_and_object_only_payload(monkeypatch, synthetic_proje
     ]
     app.radio[0].set_value("uncertain")
     app = next(b for b in app.button if b.label == "Complete dispute").click().run()
+    assert app.title[0].value == "Final dispute decision"
+    assert not Storage(synthetic_project.database_path).rows("dispute_annotations", "coder_01")
+    app.radio[1].set_value(3)
+    app = next(b for b in app.button if b.label == "Complete dispute").click().run()
     row = Storage(synthetic_project.database_path).rows("dispute_annotations", "coder_01")[0]
-    assert json.loads(row["payload_json"]) == {"C_primary_dispute_object": "uncertain"}
+    assert json.loads(row["payload_json"]) == {"C_primary_dispute_object": "uncertain", "DV_dispute_resolution": 3}
     assert json.loads(
         Storage(synthetic_project.database_path).rows("dispute_annotation_events", "coder_01")[0][
             "answered_fields_json"
         ]
-    ) == ["C_primary_dispute_object"]
+    ) == ["C_primary_dispute_object", "DV_dispute_resolution"]
 
 
 def test_annotator_remarks_are_isolated_by_utterance(monkeypatch, synthetic_project):

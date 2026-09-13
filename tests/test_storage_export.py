@@ -13,6 +13,7 @@ def current_payload(**changes):
         "KS_present": 0,
         "KS_explicit_reasoning": None,
         "KS_grounding": None,
+        "KS_new_evidence": None,
         "KS_restaking": None,
         "KS_bounding": None,
         "KI_present": 0,
@@ -143,8 +144,8 @@ def test_dispute_completion_export_propagation_and_isolation(tmp_path, synthetic
     storage.save_dispute(
         coder="coder_1",
         dispute_id="D1",
-        payload={"C_primary_dispute_object": "wording_or_representation"},
-        answered_fields={"C_primary_dispute_object"},
+        payload={"C_primary_dispute_object": "wording_or_representation", "DV_dispute_resolution": 4},
+        answered_fields={"C_primary_dispute_object", "DV_dispute_resolution"},
         schema_version="0.9.7",
         schema_hash="abc",
         opened_at="2020-01-01T00:00:00Z",
@@ -165,6 +166,8 @@ def test_dispute_completion_export_propagation_and_isolation(tmp_path, synthetic
     frame = pd.read_excel(BytesIO(data), sheet_name="Gold_Annotations")
     row = frame[frame.utterance_id == "u1"].iloc[0]
     assert row.C_primary_dispute_object == "wording_or_representation"
+    assert row.DV_dispute_resolution == 4
+    assert pd.isna(row.KS_new_evidence)
     assert "KI_prior_knowledge_utterance_ids" not in frame.columns
     assert pd.isna(row.KS_explicit_reasoning)
     assert set(frame.utterance_id) == {"u1"}
@@ -204,6 +207,32 @@ def test_export_preserves_compatible_annotation_from_older_schema(tmp_path, synt
     assert "KI_evidence_span" not in annotations.columns
     assert "control_evidence_span" not in annotations.columns
     assert not any("candidate" in str(column).lower() for column in annotations.columns)
+
+
+def test_grounded_new_evidence_exports_as_integer(tmp_path, synthetic_project):
+    storage = Storage(tmp_path / "db.sqlite")
+    save(
+        storage,
+        payload=current_payload(
+            KS_present=1,
+            KS_explicit_reasoning=0,
+            KS_grounding=1,
+            KS_new_evidence=1,
+            KS_restaking=0,
+            KS_bounding=0,
+        ),
+    )
+    book = load_codebook(synthetic_project.codebook_path)
+    data = build_export(
+        storage,
+        read_gold(synthetic_project.gold_path),
+        "coder_1",
+        "new",
+        "new-hash",
+        tuple(book.fields),
+        tuple(book.dispute_objects),
+    )
+    assert pd.read_excel(BytesIO(data)).iloc[0].KS_new_evidence == 1
 
 
 def test_old_field_payload_is_preserved_but_not_exported(tmp_path, synthetic_project):
@@ -261,6 +290,36 @@ def test_obsolete_dispute_object_exports_blank(tmp_path, synthetic_project):
     )
     row = pd.read_excel(BytesIO(data), sheet_name="Gold_Annotations").iloc[0]
     assert pd.isna(row.C_primary_dispute_object)
+    assert pd.isna(row.DV_dispute_resolution)
+
+
+def test_old_dispute_record_requires_resolution_without_losing_event(tmp_path, synthetic_project):
+    storage = Storage(tmp_path / "db.sqlite")
+    save(storage)
+    storage.save_dispute(
+        coder="coder_1",
+        dispute_id="D1",
+        payload={"C_primary_dispute_object": "uncertain"},
+        answered_fields={"C_primary_dispute_object"},
+        schema_version="old",
+        schema_hash="old",
+        opened_at="2020-01-01T00:00:00Z",
+        elapsed_wall_seconds=1,
+    )
+    book = load_codebook(synthetic_project.codebook_path)
+    data = build_export(
+        storage,
+        read_gold(synthetic_project.gold_path),
+        "coder_1",
+        "new",
+        "new-hash",
+        tuple(book.fields),
+        tuple(book.dispute_objects),
+    )
+    row = pd.read_excel(BytesIO(data)).iloc[0]
+    assert pd.isna(row.C_primary_dispute_object)
+    assert pd.isna(row.DV_dispute_resolution)
+    assert len(storage.rows("dispute_annotation_events", "coder_1")) == 1
 
 
 def test_backup_is_consistent(tmp_path):

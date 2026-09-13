@@ -48,6 +48,7 @@ def save(storage: Storage, uid: str, *, saved: str = "2026-01-01T00:00:00Z", mar
             "KS_present": marker,
             "KS_explicit_reasoning": None,
             "KS_grounding": None,
+            "KS_new_evidence": None,
             "KS_restaking": None,
             "KS_bounding": None,
             "KI_present": 0,

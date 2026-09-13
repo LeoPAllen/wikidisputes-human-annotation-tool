@@ -46,7 +46,7 @@ def test_unexpected_codebook_column_is_rejected(tmp_path, codebook_frame):
 @pytest.mark.parametrize("question", [None, "   "])
 def test_missing_or_blank_question_is_rejected(tmp_path, codebook_frame, question):
     frame = codebook_frame.copy()
-    frame.loc[0, "question"] = question
+    frame.loc[0, "Question"] = question
     path = tmp_path / "bad-question.xlsx"
     write_codebook(path, frame)
     with pytest.raises(ValueError, match="questions must be nonblank"):
