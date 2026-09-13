@@ -1,4 +1,5 @@
 import json
+import time
 
 import pandas as pd
 from streamlit.testing.v1 import AppTest
@@ -178,6 +179,31 @@ def test_obsolete_dispute_object_does_not_count_as_complete(monkeypatch, synthet
     assert app.title[0].value == "Final dispute decision"
 
 
+def test_valid_dispute_decision_waits_for_current_utterances(monkeypatch, synthetic_project):
+    storage = Storage(synthetic_project.database_path)
+    save_payload(storage, current_payload(), uid="u1")
+    stale = current_payload()
+    stale.pop("KS_new_evidence")
+    save_payload(storage, stale, uid="u2")
+    storage.save_dispute(
+        coder="coder_01",
+        dispute_id="D1",
+        payload={"C_primary_dispute_object": "uncertain", "DV_dispute_resolution": 3},
+        answered_fields={"C_primary_dispute_object", "DV_dispute_resolution"},
+        schema_version="old-schema",
+        schema_hash="old-hash",
+        opened_at="2020-01-01T00:00:00Z",
+        elapsed_wall_seconds=1,
+    )
+    app = configured(monkeypatch, synthetic_project)
+    assert [(item.label, item.value) for item in app.metric] == [
+        ("Utterances submitted", "1 / 2"),
+        ("Disputes finalized", "0 / 1"),
+    ]
+    dispute = next(item for item in app.selectbox if item.label == "Article / dispute")
+    assert "In progress" in dispute.options[0]
+
+
 def test_landing_and_annotation_navigation_target_specific_utterances(monkeypatch, synthetic_project):
     storage = Storage(synthetic_project.database_path)
     storage.set_active_coder("coder_01")
@@ -247,6 +273,15 @@ def test_full_dispute_smoke_and_object_only_payload(monkeypatch, synthetic_proje
     app = answer_all(app, ks=1, ki=1)
     app = next(b for b in app.button if b.label == "Submit and next").click().run()
     assert app.title[0].value == "Final dispute decision"
+    first_opened_at = app.session_state["dispute_opened_at"]
+    first_timer_start = app.session_state["dispute_timer_start"]
+    workspace = configured(monkeypatch, synthetic_project)
+    assert [(item.label, item.value) for item in workspace.metric] == [
+        ("Utterances submitted", "2 / 2"),
+        ("Disputes finalized", "0 / 1"),
+    ]
+    dispute = next(item for item in workspace.selectbox if item.label == "Article / dispute")
+    assert "Final judgment pending" in dispute.options[0]
     assert [item.label for item in app.radio] == [
         "Which object primarily organizes this dispute?",
         "How resolved is this dispute?",
@@ -262,10 +297,19 @@ def test_full_dispute_smoke_and_object_only_payload(monkeypatch, synthetic_proje
     app.radio[0].set_value("uncertain")
     app = next(b for b in app.button if b.label == "Complete dispute").click().run()
     assert app.title[0].value == "Final dispute decision"
+    assert app.session_state["dispute_opened_at"] == first_opened_at
+    assert app.session_state["dispute_timer_start"] == first_timer_start
     assert not Storage(synthetic_project.database_path).rows("dispute_annotations", "coder_01")
+    app.session_state["dispute_timer_start"] = time.monotonic() - 5
     app.radio[1].set_value(3)
     app = next(b for b in app.button if b.label == "Complete dispute").click().run()
     row = Storage(synthetic_project.database_path).rows("dispute_annotations", "coder_01")[0]
+    assert row["opened_at"] == first_opened_at
+    assert row["elapsed_wall_seconds"] >= 5
+    assert [(item.label, item.value) for item in app.metric] == [
+        ("Utterances submitted", "2 / 2"),
+        ("Disputes finalized", "1 / 1"),
+    ]
     assert json.loads(row["payload_json"]) == {"C_primary_dispute_object": "uncertain", "DV_dispute_resolution": 3}
     assert json.loads(
         Storage(synthetic_project.database_path).rows("dispute_annotation_events", "coder_01")[0][

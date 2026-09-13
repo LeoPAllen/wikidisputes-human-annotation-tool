@@ -104,10 +104,13 @@ for annotation_row in current_rows:
         submitted[str(annotation_row["utterance_id"])] = annotation_row
 dispute_rows = storage.rows("dispute_annotations", coder)
 allowed_dispute_objects = set(codebook.dispute_objects)
+dispute_ids = frame["dispute_id"].drop_duplicates().astype(str).tolist()
 completed_disputes = {
     str(r["dispute_id"])
     for r in dispute_rows
     if is_current_dispute_decision(json.loads(r["payload_json"]), allowed_dispute_objects)
+    and set(dataset.annotatable_in_dispute(str(r["dispute_id"]))["_annotation_key"].astype(str)) <= set(submitted)
+    and str(r["dispute_id"]) in dispute_ids
 }
 
 st.sidebar.caption(f"Coder: **{coder}**")
@@ -146,7 +149,10 @@ def dispute_choices() -> dict[str, str]:
     for did in frame["dispute_id"].drop_duplicates().astype(str):
         turns = dataset.annotatable_in_dispute(did)
         done, total = dispute_progress(dataset, did, set(submitted))
-        choices[f"{article_title(turns.iloc[0])} · {did} · {done}/{total}"] = did
+        status = (
+            "Finalized" if did in completed_disputes else "Final judgment pending" if done == total else "In progress"
+        )
+        choices[f"{article_title(turns.iloc[0])} · {did} · {done}/{total} · {status}"] = did
     return choices
 
 
@@ -190,6 +196,7 @@ if "page" not in st.session_state:
 if st.session_state.page == "home":
     st.title("Annotation workspace")
     st.metric("Utterances submitted", f"{len(submitted)} / {len(frame)}")
+    st.metric("Disputes finalized", f"{len(completed_disputes)} / {len(dispute_ids)}")
     choices = dispute_choices()
     selected = st.selectbox("Article / dispute", list(choices), index=None, placeholder="Choose an article and dispute")
     selected_utterance = None
@@ -228,6 +235,10 @@ if st.session_state.page == "dispute":
             st.rerun()
         st.stop()
     st.title("Final dispute decision")
+    if st.session_state.get("dispute_timer_did") != did:
+        st.session_state.dispute_timer_did = did
+        st.session_state.dispute_timer_start = time.monotonic()
+        st.session_state.dispute_opened_at = opened_at()
     for _, turn in dataset.full_dispute(did).iterrows():
         prior_comment(turn, (f"#{int(turn['utterance_order'])}",))
     existing_row = next((r for r in dispute_rows if str(r["dispute_id"]) == did), None)
@@ -272,8 +283,8 @@ if st.session_state.page == "dispute":
                 answered_fields={"C_primary_dispute_object", "DV_dispute_resolution"},
                 schema_version=active_schema_id,
                 schema_hash=codebook.file_hash,
-                opened_at=opened_at(),
-                elapsed_wall_seconds=0,
+                opened_at=st.session_state.dispute_opened_at,
+                elapsed_wall_seconds=time.monotonic() - st.session_state.dispute_timer_start,
             )
             go("home")
             st.rerun()

@@ -51,6 +51,16 @@ PROVENANCE_COLUMNS = (
     "export_schema_id",
     "export_schema_hash",
 )
+DISPUTE_EXPORT_COLUMNS = (
+    "dispute_id",
+    "C_primary_dispute_object",
+    "DV_dispute_resolution",
+    "coder_id",
+    "schema_version",
+    "schema_hash",
+    "saved_at",
+    "revision_number",
+)
 
 
 def _flatten(value: Any) -> Any:
@@ -73,7 +83,7 @@ def build_export(
     current = storage.rows("utterance_annotations", coder)
     disputes = storage.rows("dispute_annotations", coder)
     current_by_id = {str(row["utterance_id"]): row for row in current}
-    dispute_by_id = {str(row["dispute_id"]): json.loads(row["payload_json"]) for row in disputes}
+    dispute_by_id = {str(row["dispute_id"]): row for row in disputes}
     schema_columns = list(dict.fromkeys(schema_fields))
     source_columns = [
         key
@@ -99,7 +109,8 @@ def build_export(
         row["export_schema_hash"] = active_schema_hash
         for key in schema_columns + list(AUDIT_EXPORT_COLUMNS):
             row[key] = _flatten(payload.get(key))
-        decision = dispute_by_id.get(str(source_row["dispute_id"]), {})
+        dispute_record = dispute_by_id.get(str(source_row["dispute_id"]))
+        decision = {} if dispute_record is None else json.loads(dispute_record["payload_json"])
         current_decision = is_current_dispute_decision(decision, set(dispute_objects))
         for field in ("C_primary_dispute_object", "DV_dispute_resolution"):
             if field in schema_columns:
@@ -117,9 +128,29 @@ def build_export(
     frame = pd.DataFrame(output_rows, columns=output_columns)
     for column in INTEGER_COLUMNS & set(frame.columns):
         frame[column] = pd.to_numeric(frame[column], errors="coerce").astype("Int64")
+    dispute_output_rows = []
+    for did in dataset.annotatable_rows["dispute_id"].drop_duplicates().astype(str):
+        record = dispute_by_id.get(did)
+        payload = {} if record is None else json.loads(record["payload_json"])
+        dispute_output_rows.append(
+            {
+                "dispute_id": did,
+                "C_primary_dispute_object": payload.get("C_primary_dispute_object"),
+                "DV_dispute_resolution": payload.get("DV_dispute_resolution"),
+                "coder_id": None if record is None else record["coder_id"],
+                "schema_version": None if record is None else record["schema_version"],
+                "schema_hash": None if record is None else record["schema_hash"],
+                "saved_at": None if record is None else record["saved_at"],
+                "revision_number": None if record is None else record["revision_number"],
+            }
+        )
+    dispute_frame = pd.DataFrame(dispute_output_rows, columns=DISPUTE_EXPORT_COLUMNS)
+    for column in ("DV_dispute_resolution", "revision_number"):
+        dispute_frame[column] = pd.to_numeric(dispute_frame[column], errors="coerce").astype("Int64")
     stream = BytesIO()
     with pd.ExcelWriter(stream, engine="openpyxl") as writer:
         frame.to_excel(writer, sheet_name="Gold_Annotations", index=False)
+        dispute_frame.to_excel(writer, sheet_name="Dispute_Annotations", index=False)
     return stream.getvalue()
 
 

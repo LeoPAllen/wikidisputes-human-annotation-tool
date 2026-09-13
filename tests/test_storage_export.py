@@ -4,7 +4,7 @@ import pytest
 
 from wikidisputes_ui.codebook import load_codebook
 from wikidisputes_ui.export import build_export
-from wikidisputes_ui.ingest import read_gold
+from wikidisputes_ui.ingest import Dataset, read_gold
 from wikidisputes_ui.storage import MigrationError, Storage
 
 
@@ -146,8 +146,8 @@ def test_dispute_completion_export_propagation_and_isolation(tmp_path, synthetic
         dispute_id="D1",
         payload={"C_primary_dispute_object": "wording_or_representation", "DV_dispute_resolution": 4},
         answered_fields={"C_primary_dispute_object", "DV_dispute_resolution"},
-        schema_version="0.9.7",
-        schema_hash="abc",
+        schema_version="dispute-v2",
+        schema_hash="dispute-hash",
         opened_at="2020-01-01T00:00:00Z",
         elapsed_wall_seconds=1,
     )
@@ -162,7 +162,7 @@ def test_dispute_completion_export_propagation_and_isolation(tmp_path, synthetic
         tuple(book.dispute_objects),
     )
     workbook = pd.ExcelFile(BytesIO(data))
-    assert workbook.sheet_names == ["Gold_Annotations"]
+    assert workbook.sheet_names == ["Gold_Annotations", "Dispute_Annotations"]
     frame = pd.read_excel(BytesIO(data), sheet_name="Gold_Annotations")
     row = frame[frame.utterance_id == "u1"].iloc[0]
     assert row.C_primary_dispute_object == "wording_or_representation"
@@ -174,6 +174,18 @@ def test_dispute_completion_export_propagation_and_isolation(tmp_path, synthetic
     assert set(book.fields) <= set(frame.columns)
     assert set(frame.export_schema_id) == {"0.9.7"}
     assert set(frame.export_schema_hash) == {"abc"}
+    dispute_row = pd.read_excel(BytesIO(data), sheet_name="Dispute_Annotations").iloc[0]
+    saved_dispute = storage.rows("dispute_annotations", "coder_1")[0]
+    assert dispute_row.dispute_id == "D1"
+    assert dispute_row.C_primary_dispute_object == "wording_or_representation"
+    assert dispute_row.DV_dispute_resolution == 4
+    assert dispute_row.coder_id == "coder_1"
+    assert dispute_row.schema_version == "dispute-v2"
+    assert dispute_row.schema_hash == "dispute-hash"
+    assert dispute_row.saved_at == saved_dispute["saved_at"]
+    assert dispute_row.revision_number == 1
+    assert row.schema_version == "0.9.7"
+    assert row.schema_hash == "abc"
     for sheet in workbook.sheet_names:
         columns = {str(column).casefold() for column in pd.read_excel(BytesIO(data), sheet_name=sheet, nrows=0).columns}
         assert not columns & {"partition", "phase", "split", "dataset_key", "source_namespace"}
@@ -193,7 +205,7 @@ def test_export_preserves_compatible_annotation_from_older_schema(tmp_path, synt
         tuple(book.dispute_objects),
     )
     workbook = pd.ExcelFile(BytesIO(data))
-    assert workbook.sheet_names == ["Gold_Annotations"]
+    assert workbook.sheet_names == ["Gold_Annotations", "Dispute_Annotations"]
     annotations = pd.read_excel(BytesIO(data), sheet_name="Gold_Annotations")
     assert list(annotations["utterance_id"]) == ["u1"]
     assert {
@@ -204,9 +216,26 @@ def test_export_preserves_compatible_annotation_from_older_schema(tmp_path, synt
         "C_off_topic_shift",
     } <= set(annotations.columns)
     assert annotations.loc[0, "schema_hash"] == "abc"
+    unannotated_dispute = pd.read_excel(BytesIO(data), sheet_name="Dispute_Annotations").iloc[0]
+    assert unannotated_dispute.dispute_id == "D1"
+    assert pd.isna(unannotated_dispute.schema_hash)
     assert "KI_evidence_span" not in annotations.columns
     assert "control_evidence_span" not in annotations.columns
     assert not any("candidate" in str(column).lower() for column in annotations.columns)
+
+
+def test_dispute_sheet_has_one_row_per_source_dispute(tmp_path, synthetic_project, source_rows):
+    storage = Storage(tmp_path / "db.sqlite")
+    save(storage)
+    second = source_rows[source_rows.utterance_id == "u2"].copy()
+    second["dispute_id"] = "D2"
+    second["utterance_id"] = "u3"
+    dataset = Dataset(pd.concat([source_rows, second], ignore_index=True))
+    book = load_codebook(synthetic_project.codebook_path)
+    data = build_export(storage, dataset, "coder_1", "new", "new-hash", tuple(book.fields), tuple(book.dispute_objects))
+    disputes = pd.read_excel(BytesIO(data), sheet_name="Dispute_Annotations")
+    assert list(disputes.dispute_id) == ["D1", "D2"]
+    assert disputes.schema_hash.isna().all()
 
 
 def test_grounded_new_evidence_exports_as_integer(tmp_path, synthetic_project):
@@ -319,6 +348,9 @@ def test_old_dispute_record_requires_resolution_without_losing_event(tmp_path, s
     row = pd.read_excel(BytesIO(data)).iloc[0]
     assert pd.isna(row.C_primary_dispute_object)
     assert pd.isna(row.DV_dispute_resolution)
+    saved_dispute = pd.read_excel(BytesIO(data), sheet_name="Dispute_Annotations").iloc[0]
+    assert saved_dispute.C_primary_dispute_object == "uncertain"
+    assert saved_dispute.schema_hash == "old"
     assert len(storage.rows("dispute_annotation_events", "coder_1")) == 1
 
 

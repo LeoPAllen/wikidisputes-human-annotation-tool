@@ -35,11 +35,15 @@ After every substantive utterance in a dispute is submitted, the workflow shows 
 `C_primary_dispute_object` and `DV_dispute_resolution` decisions. Both are required; resolution is an integer from 1
 through 5. Dispute-object values come from the codebook Indicator enum; matching descriptions are parsed from the
 coding rule when present.
+The workspace shows separate submitted-utterance and finalized-dispute counts. A dispute is finalized only when all
+its utterances are current and its final decision has both valid answers.
 
 The Excel export contains only submitted substantive rows with all current utterance schema keys. It propagates only a
 current-valid dispute decision in both columns, emits inapplicable nulls as blank cells, uses nullable integers for
 binary, resolution, and audit values, excludes legacy gold annotations and obsolete schema fields, and retains source
-identifiers plus audit provenance.
+identifiers plus audit provenance. A `Dispute_Annotations` sheet has one row per dispute and includes the saved
+dispute decision's own schema version/hash, save time, and revision number; disputes without a saved decision have
+blank annotation fields.
 Historical SQLite event payloads remain unchanged and available in database backups.
 Older utterance records missing `KS_new_evidence` require re-review; older dispute records missing a valid resolution
 require completion. Existing event history is retained.
