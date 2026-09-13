@@ -421,15 +421,24 @@ with coding.container(height=430, border=False, key="utterance_coding_pane"):
         ask("KI_present")
         for name in BASE_BINARY[2:]:
             ask(name)
-    task_intro(tasks, "How confident are you in this utterance annotation?", description="Choose 1 through 5.")
+    task_intro(
+        tasks, "How confident are you in this utterance annotation?", description="Choose your confidence level."
+    )
     confidence_options = list(range(1, 6))
+    confidence_labels = (
+        "Not at all confident",
+        "Slightly confident",
+        "Moderately confident",
+        "Very confident",
+        "Absolutely confident",
+    )
     values["coder_confidence"] = st.radio(
         "How confident are you in this utterance annotation?",
         confidence_options,
         index=confidence_options.index(values["coder_confidence"])
         if values.get("coder_confidence") in confidence_options
         else None,
-        horizontal=True,
+        format_func=lambda value: f"{value} — {confidence_labels[value - 1]}",
         key=f"coder_confidence_{uid}",
         label_visibility="collapsed",
     )

@@ -94,6 +94,15 @@ def answer_all(app, ks=0, ki=0):
 
 def test_inline_workflow_has_no_stages_and_conditional_children(monkeypatch, synthetic_project):
     app = enter(configured(monkeypatch, synthetic_project))
+    confidence = radio(app, "How confident are you in this utterance annotation?")
+    assert confidence.options == [
+        "1 — Not at all confident",
+        "2 — Slightly confident",
+        "3 — Moderately confident",
+        "4 — Very confident",
+        "5 — Absolutely confident",
+    ]
+    assert confidence.value is None
     labels = {item.label for item in app.radio}
     assert "Does it make its reasoning explicit?" not in labels
     radio(app, "Does this utterance stake knowledge?").set_value(1)
@@ -381,6 +390,9 @@ def test_annotator_remarks_are_isolated_by_utterance(monkeypatch, synthetic_proj
     app = next(b for b in app.button if b.label == "Submit and next").click().run()
 
     assert app.session_state["unit_id"] == "u2"
+    assert (
+        Storage(synthetic_project.database_path).current_utterance("coder_01", "u1")["payload"]["coder_confidence"] == 5
+    )
     assert radio(app, "How confident are you in this utterance annotation?").value is None
     assert radio(app, "Flag this utterance for review?").value is None
     assert next(item for item in app.text_area if item.label == "Optional comment").value == ""
