@@ -18,7 +18,8 @@ from wikidisputes_ui.models import (
     KS_FIELDS,
     applicable_fields,
     is_current_dispute_decision,
-    is_structurally_compatible_utterance,
+    is_current_submitted_utterance,
+    is_finalized_dispute,
     normalize_and_validate,
 )
 from wikidisputes_ui.navigation import dispute_destination, dispute_progress, previous_utterance
@@ -96,21 +97,23 @@ current_rows = storage.rows("utterance_annotations", coder)
 submitted = {}
 for annotation_row in current_rows:
     payload = json.loads(annotation_row["payload_json"])
-    if (
-        annotation_row["status"] == "submitted"
-        and str(annotation_row["utterance_id"]) in all_ids
-        and is_structurally_compatible_utterance(payload)
+    if str(annotation_row["utterance_id"]) in all_ids and is_current_submitted_utterance(
+        annotation_row["status"], payload
     ):
         submitted[str(annotation_row["utterance_id"])] = annotation_row
 dispute_rows = storage.rows("dispute_annotations", coder)
+dispute_payload_by_id = {str(r["dispute_id"]): json.loads(r["payload_json"]) for r in dispute_rows}
 allowed_dispute_objects = set(codebook.dispute_objects)
 dispute_ids = frame["dispute_id"].drop_duplicates().astype(str).tolist()
 completed_disputes = {
-    str(r["dispute_id"])
-    for r in dispute_rows
-    if is_current_dispute_decision(json.loads(r["payload_json"]), allowed_dispute_objects)
-    and set(dataset.annotatable_in_dispute(str(r["dispute_id"]))["_annotation_key"].astype(str)) <= set(submitted)
-    and str(r["dispute_id"]) in dispute_ids
+    did
+    for did in dispute_ids
+    if is_finalized_dispute(
+        set(dataset.annotatable_in_dispute(did)["_annotation_key"].astype(str)),
+        set(submitted),
+        dispute_payload_by_id.get(did, {}),
+        allowed_dispute_objects,
+    )
 }
 
 st.sidebar.caption(f"Coder: **{coder}**")
@@ -266,7 +269,7 @@ if st.session_state.page == "dispute":
         format_func=lambda value: value.replace("_", " ").capitalize(),
     )
     task_intro(tasks, codebook.fields["DV_dispute_resolution"].question, codebook.fields["DV_dispute_resolution"])
-    resolution_options = list(codebook.resolution_labels)
+    resolution_options = sorted(codebook.resolution_labels)
     resolution = st.radio(
         codebook.fields["DV_dispute_resolution"].question,
         resolution_options,

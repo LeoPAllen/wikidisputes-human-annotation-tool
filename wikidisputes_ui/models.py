@@ -58,12 +58,27 @@ def is_structurally_compatible_utterance(payload: dict[str, Any]) -> bool:
     return all(name in payload for name in CURRENT_UTTERANCE_SCHEMA_FIELDS)
 
 
+def is_current_submitted_utterance(status: str, payload: dict[str, Any]) -> bool:
+    return status == "submitted" and is_structurally_compatible_utterance(payload)
+
+
 def is_current_dispute_decision(payload: dict[str, Any], allowed_values: set[str]) -> bool:
     resolution = payload.get("DV_dispute_resolution")
     return (
         payload.get("C_primary_dispute_object") in allowed_values
         and type(resolution) is int
         and resolution in range(1, 6)
+    )
+
+
+def is_finalized_dispute(
+    required_utterance_ids: set[str],
+    current_submitted_ids: set[str],
+    decision_payload: dict[str, Any],
+    allowed_values: set[str],
+) -> bool:
+    return required_utterance_ids <= current_submitted_ids and is_current_dispute_decision(
+        decision_payload, allowed_values
     )
 
 

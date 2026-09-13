@@ -16,7 +16,7 @@ from .ingest import (
     LEGACY_SOURCE_ANNOTATION_COLUMNS,
     Dataset,
 )
-from .models import is_current_dispute_decision, is_structurally_compatible_utterance
+from .models import is_current_dispute_decision, is_current_submitted_utterance, is_finalized_dispute
 from .storage import Storage
 
 INTEGER_COLUMNS = {
@@ -55,7 +55,8 @@ DISPUTE_EXPORT_COLUMNS = (
     "dispute_id",
     "C_primary_dispute_object",
     "DV_dispute_resolution",
-    "is_current",
+    "decision_is_current",
+    "dispute_is_finalized",
     "coder_id",
     "schema_version",
     "schema_hash",
@@ -87,6 +88,22 @@ def build_export(
     disputes = storage.rows("dispute_annotations", coder)
     current_by_id = {str(row["utterance_id"]): row for row in current}
     dispute_by_id = {str(row["dispute_id"]): row for row in disputes}
+    decisions_by_id = {did: json.loads(row["payload_json"]) for did, row in dispute_by_id.items()}
+    current_submitted_ids = {
+        uid
+        for uid, row in current_by_id.items()
+        if is_current_submitted_utterance(row["status"], json.loads(row["payload_json"]))
+    }
+    allowed_values = set(dispute_objects)
+    finalized_by_id = {
+        did: is_finalized_dispute(
+            set(dataset.annotatable_in_dispute(did)["_annotation_key"].astype(str)),
+            current_submitted_ids,
+            decisions_by_id.get(did, {}),
+            allowed_values,
+        )
+        for did in dataset.annotatable_rows["dispute_id"].drop_duplicates().astype(str)
+    }
     schema_columns = list(dict.fromkeys(schema_fields))
     source_columns = [
         key
@@ -102,22 +119,21 @@ def build_export(
     output_rows = []
     for _, source_row in dataset.annotatable_rows.iterrows():
         annotation = current_by_id.get(str(source_row["_annotation_key"]))
-        if not annotation or annotation["status"] != "submitted":
+        if not annotation:
             continue
         payload = json.loads(annotation["payload_json"])
-        if not is_structurally_compatible_utterance(payload):
+        if not is_current_submitted_utterance(annotation["status"], payload):
             continue
         row = {key: (None if pd.isna(value) else value) for key, value in source_row.items() if key in source_columns}
         row["export_schema_id"] = active_schema_id
         row["export_schema_hash"] = active_schema_hash
         for key in schema_columns + list(AUDIT_EXPORT_COLUMNS):
             row[key] = _flatten(payload.get(key))
-        dispute_record = dispute_by_id.get(str(source_row["dispute_id"]))
-        decision = {} if dispute_record is None else json.loads(dispute_record["payload_json"])
-        current_decision = is_current_dispute_decision(decision, set(dispute_objects))
+        did = str(source_row["dispute_id"])
+        decision = decisions_by_id.get(did, {})
         for field in ("C_primary_dispute_object", "DV_dispute_resolution"):
             if field in schema_columns:
-                row[field] = decision.get(field) if current_decision else None
+                row[field] = decision.get(field) if finalized_by_id[did] else None
         row.update(
             {
                 "coder_id": coder,
@@ -134,13 +150,14 @@ def build_export(
     dispute_output_rows = []
     for did in dataset.annotatable_rows["dispute_id"].drop_duplicates().astype(str):
         record = dispute_by_id.get(did)
-        payload = {} if record is None else json.loads(record["payload_json"])
+        payload = decisions_by_id.get(did, {})
         dispute_output_rows.append(
             {
                 "dispute_id": did,
                 "C_primary_dispute_object": payload.get("C_primary_dispute_object"),
                 "DV_dispute_resolution": payload.get("DV_dispute_resolution"),
-                "is_current": is_current_dispute_decision(payload, set(dispute_objects)),
+                "decision_is_current": is_current_dispute_decision(payload, allowed_values),
+                "dispute_is_finalized": finalized_by_id[did],
                 "coder_id": None if record is None else record["coder_id"],
                 "schema_version": None if record is None else record["schema_version"],
                 "schema_hash": None if record is None else record["schema_hash"],

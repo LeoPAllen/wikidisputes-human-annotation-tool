@@ -122,9 +122,8 @@ def test_question_text_is_loaded_from_workbook(monkeypatch, synthetic_project):
 def test_resolution_anchor_text_is_loaded_from_workbook(monkeypatch, synthetic_project):
     frame = pd.read_excel(synthetic_project.codebook_path, sheet_name="Core_Schema")
     row = frame.Label == "DV_dispute_resolution"
-    frame.loc[row, "Coding rule"] = (
-        frame.loc[row, "Coding rule"].iloc[0].replace("2 = Mostly unresolved", "2 = Workbook-specific anchor")
-    )
+    rule = frame.loc[row, "Coding rule"].iloc[0].replace("2 = Mostly unresolved", "2 = Workbook-specific anchor")
+    frame.loc[row, "Coding rule"] = "\n".join(reversed(rule.splitlines()))
     with pd.ExcelWriter(synthetic_project.codebook_path, engine="openpyxl") as writer:
         frame.to_excel(writer, sheet_name="Core_Schema", index=False)
     storage = Storage(synthetic_project.database_path)
@@ -135,7 +134,13 @@ def test_resolution_anchor_text_is_loaded_from_workbook(monkeypatch, synthetic_p
     dispute.set_value(dispute.options[0])
     app = app.run()
     app = next(button for button in app.button if button.label == "Open dispute →").click().run()
-    assert "2 — Workbook-specific anchor" in radio(app, "How resolved is this dispute?").options
+    assert radio(app, "How resolved is this dispute?").options == [
+        "1 — Clearly unresolved",
+        "2 — Workbook-specific anchor",
+        "3 — Partly resolved / unclear",
+        "4 — Mostly resolved",
+        "5 — Clearly resolved",
+    ]
 
 
 def test_question_only_hash_change_does_not_reset_progress(monkeypatch, synthetic_project):

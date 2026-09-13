@@ -140,6 +140,7 @@ def test_dispute_completion_export_propagation_and_isolation(tmp_path, synthetic
     storage = Storage(tmp_path / "db.sqlite")
     storage.register_schema("0.9.7", "abc", "codebook.xlsx")
     save(storage)
+    save(storage, uid="u2")
     save(storage, coder="other_1", uid="u2")
     storage.save_dispute(
         coder="coder_1",
@@ -167,19 +168,23 @@ def test_dispute_completion_export_propagation_and_isolation(tmp_path, synthetic
     row = frame[frame.utterance_id == "u1"].iloc[0]
     assert row.C_primary_dispute_object == "wording_or_representation"
     assert row.DV_dispute_resolution == 4
+    assert frame.C_primary_dispute_object.eq("wording_or_representation").all()
+    assert frame.DV_dispute_resolution.eq(4).all()
     assert pd.isna(row.KS_new_evidence)
     assert "KI_prior_knowledge_utterance_ids" not in frame.columns
     assert pd.isna(row.KS_explicit_reasoning)
-    assert set(frame.utterance_id) == {"u1"}
+    assert set(frame.utterance_id) == {"u1", "u2"}
     assert set(book.fields) <= set(frame.columns)
     assert set(frame.export_schema_id) == {"0.9.7"}
     assert set(frame.export_schema_hash) == {"abc"}
     dispute_row = pd.read_excel(BytesIO(data), sheet_name="Dispute_Annotations").iloc[0]
+    assert "is_current" not in pd.read_excel(BytesIO(data), sheet_name="Dispute_Annotations", nrows=0).columns
     saved_dispute = storage.rows("dispute_annotations", "coder_1")[0]
     assert dispute_row.dispute_id == "D1"
     assert dispute_row.C_primary_dispute_object == "wording_or_representation"
     assert dispute_row.DV_dispute_resolution == 4
-    assert dispute_row.is_current
+    assert dispute_row.decision_is_current
+    assert dispute_row.dispute_is_finalized
     assert dispute_row.coder_id == "coder_1"
     assert dispute_row.schema_version == "dispute-v2"
     assert dispute_row.schema_hash == "dispute-hash"
@@ -192,6 +197,42 @@ def test_dispute_completion_export_propagation_and_isolation(tmp_path, synthetic
     for sheet in workbook.sheet_names:
         columns = {str(column).casefold() for column in pd.read_excel(BytesIO(data), sheet_name=sheet, nrows=0).columns}
         assert not columns & {"partition", "phase", "split", "dataset_key", "source_namespace"}
+
+
+def test_current_decision_does_not_finalize_dispute_with_stale_utterance(tmp_path, synthetic_project):
+    storage = Storage(tmp_path / "db.sqlite")
+    save(storage)
+    stale = current_payload()
+    stale.pop("KS_new_evidence")
+    save(storage, uid="u2", payload=stale)
+    storage.save_dispute(
+        coder="coder_1",
+        dispute_id="D1",
+        payload={"C_primary_dispute_object": "uncertain", "DV_dispute_resolution": 3},
+        answered_fields={"C_primary_dispute_object", "DV_dispute_resolution"},
+        schema_version="old",
+        schema_hash="old",
+        opened_at="2020-01-01T00:00:00Z",
+        elapsed_wall_seconds=1,
+    )
+    book = load_codebook(synthetic_project.codebook_path)
+    data = build_export(
+        storage,
+        read_gold(synthetic_project.gold_path),
+        "coder_1",
+        "new",
+        "new-hash",
+        tuple(book.fields),
+        tuple(book.dispute_objects),
+    )
+    dispute = pd.read_excel(BytesIO(data), sheet_name="Dispute_Annotations").iloc[0]
+    utterance = pd.read_excel(BytesIO(data), sheet_name="Gold_Annotations").iloc[0]
+    assert dispute.decision_is_current
+    assert not dispute.dispute_is_finalized
+    assert dispute.C_primary_dispute_object == "uncertain"
+    assert dispute.DV_dispute_resolution == 3
+    assert pd.isna(utterance.C_primary_dispute_object)
+    assert pd.isna(utterance.DV_dispute_resolution)
 
 
 def test_export_preserves_compatible_annotation_from_older_schema(tmp_path, synthetic_project):
@@ -222,7 +263,8 @@ def test_export_preserves_compatible_annotation_from_older_schema(tmp_path, synt
     unannotated_dispute = pd.read_excel(BytesIO(data), sheet_name="Dispute_Annotations").iloc[0]
     assert unannotated_dispute.dispute_id == "D1"
     assert pd.isna(unannotated_dispute.schema_hash)
-    assert not unannotated_dispute.is_current
+    assert not unannotated_dispute.decision_is_current
+    assert not unannotated_dispute.dispute_is_finalized
     assert "KI_evidence_span" not in annotations.columns
     assert "control_evidence_span" not in annotations.columns
     assert not any("candidate" in str(column).lower() for column in annotations.columns)
@@ -354,7 +396,8 @@ def test_old_dispute_record_requires_resolution_without_losing_event(tmp_path, s
     assert pd.isna(row.DV_dispute_resolution)
     saved_dispute = pd.read_excel(BytesIO(data), sheet_name="Dispute_Annotations").iloc[0]
     assert saved_dispute.C_primary_dispute_object == "uncertain"
-    assert not saved_dispute.is_current
+    assert not saved_dispute.decision_is_current
+    assert not saved_dispute.dispute_is_finalized
     assert saved_dispute.schema_hash == "old"
     assert saved_dispute.opened_at == "2020-01-01T00:00:00Z"
     assert saved_dispute.elapsed_wall_seconds == 1
@@ -386,7 +429,8 @@ def test_invalid_resolution_remains_auditable_but_not_current(tmp_path, syntheti
     )
     dispute = pd.read_excel(BytesIO(data), sheet_name="Dispute_Annotations").iloc[0]
     utterance = pd.read_excel(BytesIO(data), sheet_name="Gold_Annotations").iloc[0]
-    assert not dispute.is_current
+    assert not dispute.decision_is_current
+    assert not dispute.dispute_is_finalized
     assert dispute.schema_hash == "old"
     assert dispute.elapsed_wall_seconds == 7
     assert pd.isna(utterance.C_primary_dispute_object)
