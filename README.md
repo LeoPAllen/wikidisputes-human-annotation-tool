@@ -43,7 +43,8 @@ current-valid dispute decision in both columns, emits inapplicable nulls as blan
 binary, resolution, and audit values, excludes legacy gold annotations and obsolete schema fields, and retains source
 identifiers plus audit provenance. A `Dispute_Annotations` sheet has one row per dispute and includes the saved
 dispute decision's own schema version/hash, save time, and revision number; disputes without a saved decision have
-blank annotation fields.
+blank annotation fields. The sheet also records the dispute form's opening time and elapsed wall time, and an
+`is_current` flag distinguishes valid decisions from older or invalid saved values.
 Historical SQLite event payloads remain unchanged and available in database backups.
 Older utterance records missing `KS_new_evidence` require re-review; older dispute records missing a valid resolution
 require completion. Existing event history is retained.

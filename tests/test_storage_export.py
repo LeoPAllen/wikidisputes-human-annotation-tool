@@ -179,10 +179,13 @@ def test_dispute_completion_export_propagation_and_isolation(tmp_path, synthetic
     assert dispute_row.dispute_id == "D1"
     assert dispute_row.C_primary_dispute_object == "wording_or_representation"
     assert dispute_row.DV_dispute_resolution == 4
+    assert dispute_row.is_current
     assert dispute_row.coder_id == "coder_1"
     assert dispute_row.schema_version == "dispute-v2"
     assert dispute_row.schema_hash == "dispute-hash"
     assert dispute_row.saved_at == saved_dispute["saved_at"]
+    assert dispute_row.opened_at == saved_dispute["opened_at"]
+    assert dispute_row.elapsed_wall_seconds == saved_dispute["elapsed_wall_seconds"]
     assert dispute_row.revision_number == 1
     assert row.schema_version == "0.9.7"
     assert row.schema_hash == "abc"
@@ -219,6 +222,7 @@ def test_export_preserves_compatible_annotation_from_older_schema(tmp_path, synt
     unannotated_dispute = pd.read_excel(BytesIO(data), sheet_name="Dispute_Annotations").iloc[0]
     assert unannotated_dispute.dispute_id == "D1"
     assert pd.isna(unannotated_dispute.schema_hash)
+    assert not unannotated_dispute.is_current
     assert "KI_evidence_span" not in annotations.columns
     assert "control_evidence_span" not in annotations.columns
     assert not any("candidate" in str(column).lower() for column in annotations.columns)
@@ -350,8 +354,43 @@ def test_old_dispute_record_requires_resolution_without_losing_event(tmp_path, s
     assert pd.isna(row.DV_dispute_resolution)
     saved_dispute = pd.read_excel(BytesIO(data), sheet_name="Dispute_Annotations").iloc[0]
     assert saved_dispute.C_primary_dispute_object == "uncertain"
+    assert not saved_dispute.is_current
     assert saved_dispute.schema_hash == "old"
+    assert saved_dispute.opened_at == "2020-01-01T00:00:00Z"
+    assert saved_dispute.elapsed_wall_seconds == 1
     assert len(storage.rows("dispute_annotation_events", "coder_1")) == 1
+
+
+def test_invalid_resolution_remains_auditable_but_not_current(tmp_path, synthetic_project):
+    storage = Storage(tmp_path / "db.sqlite")
+    save(storage)
+    storage.save_dispute(
+        coder="coder_1",
+        dispute_id="D1",
+        payload={"C_primary_dispute_object": "uncertain", "DV_dispute_resolution": "3"},
+        answered_fields={"C_primary_dispute_object", "DV_dispute_resolution"},
+        schema_version="old",
+        schema_hash="old",
+        opened_at="2020-01-01T00:00:00Z",
+        elapsed_wall_seconds=7,
+    )
+    book = load_codebook(synthetic_project.codebook_path)
+    data = build_export(
+        storage,
+        read_gold(synthetic_project.gold_path),
+        "coder_1",
+        "new",
+        "new-hash",
+        tuple(book.fields),
+        tuple(book.dispute_objects),
+    )
+    dispute = pd.read_excel(BytesIO(data), sheet_name="Dispute_Annotations").iloc[0]
+    utterance = pd.read_excel(BytesIO(data), sheet_name="Gold_Annotations").iloc[0]
+    assert not dispute.is_current
+    assert dispute.schema_hash == "old"
+    assert dispute.elapsed_wall_seconds == 7
+    assert pd.isna(utterance.C_primary_dispute_object)
+    assert pd.isna(utterance.DV_dispute_resolution)
 
 
 def test_backup_is_consistent(tmp_path):

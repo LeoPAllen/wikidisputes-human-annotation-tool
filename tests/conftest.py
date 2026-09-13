@@ -38,6 +38,14 @@ def codebook_frame():
             rule = "\n".join(f"• {value}: Description for {value}." for value in EXPECTED_DISPUTE_OBJECTS[:-1])
         if label == "DV_dispute_resolution":
             indicator = "ordinal {1,2,3,4,5}; dispute-level"
+            anchors = (
+                "Clearly unresolved",
+                "Mostly unresolved",
+                "Partly resolved / unclear",
+                "Mostly resolved",
+                "Clearly resolved",
+            )
+            rule = "\n".join(f"{value} = {anchor}: Synthetic guidance." for value, anchor in enumerate(anchors, 1))
         rows.append(
             {
                 "Family": "Dispute Context" if label == "C_primary_dispute_object" else "Synthetic",

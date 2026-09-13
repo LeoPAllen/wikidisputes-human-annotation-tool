@@ -119,6 +119,25 @@ def test_question_text_is_loaded_from_workbook(monkeypatch, synthetic_project):
     assert "Does this utterance stake knowledge?" not in labels
 
 
+def test_resolution_anchor_text_is_loaded_from_workbook(monkeypatch, synthetic_project):
+    frame = pd.read_excel(synthetic_project.codebook_path, sheet_name="Core_Schema")
+    row = frame.Label == "DV_dispute_resolution"
+    frame.loc[row, "Coding rule"] = (
+        frame.loc[row, "Coding rule"].iloc[0].replace("2 = Mostly unresolved", "2 = Workbook-specific anchor")
+    )
+    with pd.ExcelWriter(synthetic_project.codebook_path, engine="openpyxl") as writer:
+        frame.to_excel(writer, sheet_name="Core_Schema", index=False)
+    storage = Storage(synthetic_project.database_path)
+    save_payload(storage, current_payload(), uid="u1")
+    save_payload(storage, current_payload(), uid="u2")
+    app = configured(monkeypatch, synthetic_project)
+    dispute = next(item for item in app.selectbox if item.label == "Article / dispute")
+    dispute.set_value(dispute.options[0])
+    app = app.run()
+    app = next(button for button in app.button if button.label == "Open dispute →").click().run()
+    assert "2 — Workbook-specific anchor" in radio(app, "How resolved is this dispute?").options
+
+
 def test_question_only_hash_change_does_not_reset_progress(monkeypatch, synthetic_project):
     storage = Storage(synthetic_project.database_path)
     save_payload(storage, current_payload(), schema_hash="older-question-hash")
@@ -294,6 +313,13 @@ def test_full_dispute_smoke_and_object_only_payload(monkeypatch, synthetic_proje
         "Mixed",
         "Uncertain",
     ]
+    assert app.radio[1].options == [
+        "1 — Clearly unresolved",
+        "2 — Mostly unresolved",
+        "3 — Partly resolved / unclear",
+        "4 — Mostly resolved",
+        "5 — Clearly resolved",
+    ]
     app.radio[0].set_value("uncertain")
     app = next(b for b in app.button if b.label == "Complete dispute").click().run()
     assert app.title[0].value == "Final dispute decision"
@@ -310,12 +336,34 @@ def test_full_dispute_smoke_and_object_only_payload(monkeypatch, synthetic_proje
         ("Utterances submitted", "2 / 2"),
         ("Disputes finalized", "1 / 1"),
     ]
+    for key in ("dispute_timer_did", "dispute_timer_start", "dispute_opened_at"):
+        assert key not in app.session_state
     assert json.loads(row["payload_json"]) == {"C_primary_dispute_object": "uncertain", "DV_dispute_resolution": 3}
     assert json.loads(
         Storage(synthetic_project.database_path).rows("dispute_annotation_events", "coder_01")[0][
             "answered_fields_json"
         ]
     ) == ["C_primary_dispute_object", "DV_dispute_resolution"]
+
+
+def test_dispute_timer_restarts_when_same_form_is_reopened(monkeypatch, synthetic_project):
+    storage = Storage(synthetic_project.database_path)
+    save_payload(storage, current_payload(), uid="u1")
+    save_payload(storage, current_payload(), uid="u2")
+    app = configured(monkeypatch, synthetic_project)
+    dispute = next(item for item in app.selectbox if item.label == "Article / dispute")
+    dispute.set_value(dispute.options[0])
+    app = app.run()
+    app = next(button for button in app.button if button.label == "Open dispute →").click().run()
+    first_timer_start = app.session_state["dispute_timer_start"]
+    app = next(button for button in app.button if button.label == "← Workspace").click().run()
+    for key in ("dispute_timer_did", "dispute_timer_start", "dispute_opened_at"):
+        assert key not in app.session_state
+    dispute = next(item for item in app.selectbox if item.label == "Article / dispute")
+    dispute.set_value(dispute.options[0])
+    app = app.run()
+    app = next(button for button in app.button if button.label == "Open dispute →").click().run()
+    assert app.session_state["dispute_timer_start"] > first_timer_start
 
 
 def test_annotator_remarks_are_isolated_by_utterance(monkeypatch, synthetic_project):

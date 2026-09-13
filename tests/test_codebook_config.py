@@ -21,6 +21,17 @@ def test_authoritative_one_sheet_codebook(tmp_path, codebook_frame):
     assert book.fields["KS_restaking"].rule
     assert book.fields["KS_restaking"].question == "Does it restate an earlier position?"
     assert book.dispute_objects["uncertain"] == ""
+    assert book.resolution_labels[3] == "Partly resolved / unclear"
+
+
+def test_resolution_anchors_must_cover_five_values(tmp_path, codebook_frame):
+    frame = codebook_frame.copy()
+    row = frame.Label == "DV_dispute_resolution"
+    frame.loc[row, "Coding rule"] = "1 = Clearly unresolved: Guidance."
+    path = tmp_path / "bad-resolution.xlsx"
+    write_codebook(path, frame)
+    with pytest.raises(ValueError, match="must define anchors"):
+        load_codebook(path)
 
 
 def test_missing_duplicate_and_unexpected_labels_are_rejected(tmp_path, codebook_frame):

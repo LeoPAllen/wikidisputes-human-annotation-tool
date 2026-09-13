@@ -55,10 +55,13 @@ DISPUTE_EXPORT_COLUMNS = (
     "dispute_id",
     "C_primary_dispute_object",
     "DV_dispute_resolution",
+    "is_current",
     "coder_id",
     "schema_version",
     "schema_hash",
+    "opened_at",
     "saved_at",
+    "elapsed_wall_seconds",
     "revision_number",
 )
 
@@ -137,10 +140,13 @@ def build_export(
                 "dispute_id": did,
                 "C_primary_dispute_object": payload.get("C_primary_dispute_object"),
                 "DV_dispute_resolution": payload.get("DV_dispute_resolution"),
+                "is_current": is_current_dispute_decision(payload, set(dispute_objects)),
                 "coder_id": None if record is None else record["coder_id"],
                 "schema_version": None if record is None else record["schema_version"],
                 "schema_hash": None if record is None else record["schema_hash"],
+                "opened_at": None if record is None else record["opened_at"],
                 "saved_at": None if record is None else record["saved_at"],
+                "elapsed_wall_seconds": None if record is None else record["elapsed_wall_seconds"],
                 "revision_number": None if record is None else record["revision_number"],
             }
         )

@@ -137,6 +137,9 @@ if st.sidebar.button("Switch coder"):
 
 
 def go(page: str, *, uid: str | None = None, did: str | None = None) -> None:
+    if st.session_state.get("page") == "dispute" and page != "dispute":
+        for key in ("dispute_timer_did", "dispute_timer_start", "dispute_opened_at"):
+            st.session_state.pop(key, None)
     st.session_state.page = page
     if uid is not None:
         st.session_state.unit_id = uid
@@ -239,6 +242,9 @@ if st.session_state.page == "dispute":
         st.session_state.dispute_timer_did = did
         st.session_state.dispute_timer_start = time.monotonic()
         st.session_state.dispute_opened_at = opened_at()
+    if st.button("← Workspace"):
+        go("home")
+        st.rerun()
     for _, turn in dataset.full_dispute(did).iterrows():
         prior_comment(turn, (f"#{int(turn['utterance_order'])}",))
     existing_row = next((r for r in dispute_rows if str(r["dispute_id"]) == did), None)
@@ -260,7 +266,7 @@ if st.session_state.page == "dispute":
         format_func=lambda value: value.replace("_", " ").capitalize(),
     )
     task_intro(tasks, codebook.fields["DV_dispute_resolution"].question, codebook.fields["DV_dispute_resolution"])
-    resolution_options = list(range(1, 6))
+    resolution_options = list(codebook.resolution_labels)
     resolution = st.radio(
         codebook.fields["DV_dispute_resolution"].question,
         resolution_options,
@@ -268,6 +274,7 @@ if st.session_state.page == "dispute":
         if type(existing.get("DV_dispute_resolution")) is int
         and existing["DV_dispute_resolution"] in resolution_options
         else None,
+        format_func=lambda value: f"{value} — {codebook.resolution_labels[value]}",
         horizontal=True,
     )
     if st.button("Complete dispute", type="primary"):

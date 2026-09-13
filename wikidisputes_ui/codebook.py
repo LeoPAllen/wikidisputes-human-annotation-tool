@@ -59,6 +59,7 @@ class FieldGuide:
 class Codebook:
     fields: dict[str, FieldGuide]
     dispute_objects: dict[str, str]
+    resolution_labels: dict[int, str]
     file_hash: str
     source_filename: str
 
@@ -97,6 +98,20 @@ def _parse_dispute_objects(indicator: str, rule: str) -> dict[str, str]:
                 raise ValueError(f"C_primary_dispute_object coding rule repeats value: {key}")
             descriptions[key] = match.group(2).strip()
     return {value: descriptions.get(value, "") for value in values}
+
+
+def _parse_resolution_labels(rule: str) -> dict[int, str]:
+    labels: dict[int, str] = {}
+    for line in rule.splitlines():
+        match = re.match(r"^\s*([1-5])\s*=\s*([^:]+):", line)
+        if match:
+            value = int(match.group(1))
+            if value in labels:
+                raise ValueError(f"DV_dispute_resolution coding rule repeats value: {value}")
+            labels[value] = match.group(2).strip()
+    if set(labels) != set(range(1, 6)):
+        raise ValueError("DV_dispute_resolution coding rule must define anchors for values 1 through 5.")
+    return labels
 
 
 def load_codebook(path: str | Path, schema_sheet: str = "Core_Schema") -> Codebook:
@@ -138,4 +153,5 @@ def load_codebook(path: str | Path, schema_sheet: str = "Core_Schema") -> Codebo
         )
     dispute_field = fields["C_primary_dispute_object"]
     objects = _parse_dispute_objects(dispute_field.indicator, dispute_field.rule)
-    return Codebook(fields, objects, file_fingerprint(path), path.name)
+    resolution_labels = _parse_resolution_labels(fields["DV_dispute_resolution"].rule)
+    return Codebook(fields, objects, resolution_labels, file_fingerprint(path), path.name)
