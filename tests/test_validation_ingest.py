@@ -7,7 +7,7 @@ from wikidisputes_ui.validation import validate_inputs
 def test_valid_fixture_roles_and_strict_past(synthetic_project):
     result = validate_inputs(synthetic_project)
     assert not result.errors
-    assert any("later utterance_order" in warning for warning in result.warnings)
+    assert any("later display order" in warning for warning in result.warnings)
     data = read_gold(synthetic_project.gold_path)
     assert list(data.annotatable_rows.utterance_id) == ["u1", "u2"]
     assert list(data.context_rows.utterance_id) == ["ctx1"]
@@ -48,3 +48,28 @@ def test_cross_dispute_reply_warns_and_never_exposes_target_text(synthetic_proje
     assert focal["reply_to_utterance_id_raw"] == "d2u1"
     visible = " ".join(data.displayable_prior_context("D1", 2)["utterance_text"].astype(str))
     assert "OUTSIDE DISPUTE TEXT" not in visible
+
+
+def test_substantive_order_is_canonical_and_zero_context_rows_are_valid(synthetic_project, source_rows):
+    frame = source_rows[source_rows["utterance_role"] == "utterance"].copy()
+    frame["utterance_order"] = None
+    frame["substantive_order"] = [1, 2]
+    with pd.ExcelWriter(synthetic_project.gold_path, engine="openpyxl") as writer:
+        frame.to_excel(writer, sheet_name="Gold_Annotation", index=False)
+
+    result = validate_inputs(synthetic_project)
+    assert not result.blocking
+    data = read_gold(synthetic_project.gold_path)
+    assert data.annotatable_rows["_display_order"].tolist() == [1, 2]
+    assert list(data.displayable_prior_context("D1", 2)["utterance_id"]) == ["u1"]
+
+
+def test_partial_substantive_order_uses_the_complete_legacy_sequence(synthetic_project, source_rows):
+    frame = source_rows.copy()
+    frame["substantive_order"] = [None, 1, 2]
+    with pd.ExcelWriter(synthetic_project.gold_path, engine="openpyxl") as writer:
+        frame.to_excel(writer, sheet_name="Gold_Annotation", index=False)
+
+    result = validate_inputs(synthetic_project)
+    assert not result.blocking
+    assert read_gold(synthetic_project.gold_path).source_rows["_display_order"].tolist() == [1, 2, 3]

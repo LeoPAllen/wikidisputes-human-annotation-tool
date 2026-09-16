@@ -15,7 +15,7 @@ from uuid import uuid4
 from . import __version__
 
 CODER_RE = re.compile(r"^[A-Za-z0-9_-]{3,40}$")
-DATABASE_VERSION = 2
+DATABASE_VERSION = 4
 ANNOTATION_TABLES = (
     "utterance_annotations",
     "utterance_annotation_events",
@@ -145,10 +145,27 @@ class Storage:
                 CREATE TABLE IF NOT EXISTS schema_versions (
                     schema_version TEXT NOT NULL, file_hash TEXT NOT NULL, source_filename TEXT NOT NULL,
                     registered_at TEXT NOT NULL, PRIMARY KEY(schema_version, file_hash));
+                CREATE TABLE IF NOT EXISTS gold_utterance_states (
+                    stable_key TEXT PRIMARY KEY, dispute_id TEXT NOT NULL,
+                    context_signature TEXT NOT NULL, recorded_at TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS gold_source_roles (
+                    stable_key TEXT PRIMARY KEY, utterance_role TEXT NOT NULL);
             """)
             if not self._columns(db, "utterance_annotations"):
                 self._create_annotation_tables(db)
             db.execute(f"PRAGMA user_version={DATABASE_VERSION}")
+
+    def backup_before_source_migration(self) -> Path:
+        """Create a durable SQLite backup immediately before Gold reconciliation mutates state."""
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        backup = self.path.with_name(f"{self.path.name}.pre-gold-migration-{stamp}.bak")
+        suffix = 1
+        while backup.exists():
+            backup = self.path.with_name(f"{self.path.name}.pre-gold-migration-{stamp}-{suffix}.bak")
+            suffix += 1
+        with self.connect() as source, sqlite3.connect(backup) as destination:
+            source.backup(destination)
+        return backup
 
     def register_schema(self, version: str, file_hash: str, source: str, locked: bool = False) -> None:
         with self.connect() as db:

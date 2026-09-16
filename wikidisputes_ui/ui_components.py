@@ -11,7 +11,7 @@ import pandas as pd
 import streamlit as st
 
 from .codebook import FieldGuide
-from .ingest import article_title
+from .ingest import article_title, display_order
 
 
 def inject_css() -> None:
@@ -93,7 +93,7 @@ def discussion_heading(row: pd.Series) -> None:
 
 def focal_card(row: pd.Series, reply_description: str | None = None) -> None:
     type_badge = "" if str(row.get("utterance_type", "")).lower() == "talk" else badge(str(row["utterance_type"]))
-    order_badge = badge(f"#{int(row['utterance_order'])}")
+    order_badge = badge(f"#{display_order(row)}")
     st.markdown(
         '<div class="focal-comment"><div class="current-label">Current utterance</div>'
         f"{order_badge}{type_badge}"

@@ -11,7 +11,7 @@ from wikidisputes_ui.codebook import load_codebook, schema_id
 from wikidisputes_ui.export import build_export
 from wikidisputes_ui.ingest import Dataset
 from wikidisputes_ui.models import normalize_and_validate
-from wikidisputes_ui.source_migration import reconcile_annotation_keys
+from wikidisputes_ui.source_migration import _winner, migrate_gold_change, reconcile_annotation_keys
 from wikidisputes_ui.storage import Storage
 
 
@@ -71,15 +71,29 @@ def save(storage: Storage, uid: str, *, saved: str = "2026-01-01T00:00:00Z", mar
         )
 
 
-def test_annotation_survives_reordered_text_changed_gold(tmp_path: Path) -> None:
+def test_changed_visible_context_requires_rereview_and_invalidates_current_decision(tmp_path: Path) -> None:
     storage = Storage(tmp_path / "annotations.sqlite3")
     old = dataset([row("u1", 1, "old", original="stable-1"), row("u2", 2, "two", original="stable-2")])
     save(storage, "u1")
+    storage.save_dispute(
+        coder="coder_1",
+        dispute_id="D1",
+        payload={"C_primary_dispute_object": "uncertain", "DV_dispute_resolution": 3},
+        answered_fields={"C_primary_dispute_object", "DV_dispute_resolution"},
+        schema_version="old",
+        schema_hash="old-hash",
+        opened_at="2026-01-01T00:00:00Z",
+        elapsed_wall_seconds=1,
+    )
     reconcile_annotation_keys(storage, old)
 
     replacement = dataset([row("u2", 1, "two changed", original="stable-2"), row("u1", 2, "new", original="stable-1")])
-    reconcile_annotation_keys(storage, replacement)
-    assert storage.current_utterance("coder_1", "stable-1")["status"] == "submitted"
+    report = reconcile_annotation_keys(storage, replacement)
+    assert storage.current_utterance("coder_1", "stable-1")["status"] == "needs_rereview"
+    assert storage.rows("dispute_annotations", "coder_1") == []
+    assert len(storage.rows("dispute_annotation_events", "coder_1")) == 1
+    assert report.db_rows_marked_needs_rereview == 1
+    assert report.backup_path and report.backup_path.is_file()
     assert replacement.annotatable_rows["utterance_order"].tolist() == [1, 2]
 
 
@@ -111,11 +125,12 @@ def test_add_remove_and_collapse_preserve_work(tmp_path: Path) -> None:
 
     collapsed = storage.current_utterance("coder_1", "collapsed")
     assert collapsed["payload"]["KS_present"] == 1
+    assert collapsed["status"] == "needs_rereview"
     assert storage.current_utterance("coder_1", "new") is None
     assert storage.current_utterance("coder_1", "removed") is not None
     assert storage.rows("utterance_annotation_events", "coder_1") == before_events
     exported = pd.read_excel(BytesIO(build_export(storage, current, "coder_1", "new", "new-hash", ("KS_present",), ())))
-    assert list(exported["utterance_id"]) == ["current"]
+    assert exported.empty
 
 
 def test_changed_codebook_bytes_register_normally(tmp_path: Path, synthetic_project) -> None:
@@ -158,3 +173,34 @@ def test_malformed_flag_persists_exports_and_allows_missing_constructs(tmp_path:
     source = dataset([row("current-id", 1, "bad", original="stable")])
     exported = pd.read_excel(BytesIO(build_export(storage, source, "coder_1", "schema", "hash", (), ())))
     assert bool(exported.loc[0, "malformed_utterance"])
+
+
+def test_direct_gold_migration_keeps_former_context_unannotated(tmp_path: Path) -> None:
+    storage = Storage(tmp_path / "annotations.sqlite3")
+    old_rows = [
+        {**row("context", 1, "Heading"), "utterance_role": "context"},
+        row("u1", 2, "First", original="stable-1"),
+    ]
+    old = dataset(old_rows)
+    old.source_rows.loc[0, "utterance_role"] = "context"
+    save(storage, "context")  # A stale legacy projection must not activate a new task.
+    new_rows = [
+        row("context", 1, "Heading"),
+        row("u1", 2, "First", original="stable-1"),
+    ]
+    report = migrate_gold_change(storage, old, dataset(new_rows))
+    assert storage.current_utterance("coder_1", "context") is None
+    assert report.source_newly_annotatable == 1
+    assert report.db_rows_stale_projections_removed == 1
+    assert len(storage.rows("utterance_annotation_events", "coder_1")) == 1
+
+
+def test_winner_does_not_promote_needs_rereview() -> None:
+    winner = _winner(
+        [
+            {"status": "submitted", "saved_at": "2026-01-02T00:00:00Z", "revision_number": 2},
+            {"status": "needs_rereview", "saved_at": "2026-01-01T00:00:00Z", "revision_number": 1},
+        ]
+    )
+    assert winner["status"] == "needs_rereview"
+    assert winner["revision_number"] == 2

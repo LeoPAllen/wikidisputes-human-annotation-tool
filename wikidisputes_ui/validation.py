@@ -10,7 +10,13 @@ import pandas as pd
 
 from .codebook import EXPECTED_LABELS, load_codebook
 from .config import ProjectConfig, load_config
-from .ingest import ANNOTATION_COLUMNS, LEGACY_SOURCE_ANNOTATION_COLUMNS, REQUIRED_COLUMNS
+from .ingest import (
+    ANNOTATION_COLUMNS,
+    LEGACY_SOURCE_ANNOTATION_COLUMNS,
+    REQUIRED_COLUMNS,
+    display_order_values,
+    stable_annotation_key,
+)
 
 
 @dataclass
@@ -65,6 +71,20 @@ def validate_inputs(config: ProjectConfig) -> QCResult:
             result.errors.append(
                 f"{sheet}: duplicate utterance_id {uid!r} at rows {', '.join(str(i + 2) for i in group.index)}."
             )
+        stable_keys: list[str | None] = []
+        for index, row in frame.iterrows():
+            try:
+                stable_keys.append(stable_annotation_key(row))
+            except ValueError:
+                stable_keys.append(None)
+                result.errors.append(f"{sheet} row {index + 2}: no stable annotation key.")
+        stable_series = pd.Series(stable_keys, index=frame.index, dtype=object)
+        for key, group in frame[stable_series.notna()].groupby(stable_series[stable_series.notna()], sort=False):
+            if len(group) > 1:
+                result.errors.append(
+                    f"{sheet}: duplicate stable annotation key {key!r} at rows "
+                    f"{', '.join(str(i + 2) for i in group.index)}."
+                )
         roles = set(frame["utterance_role"].dropna().astype(str))
         invalid_roles = roles - {"context", "utterance"}
         if frame["utterance_role"].isna().any() or invalid_roles:
@@ -74,27 +94,28 @@ def validate_inputs(config: ProjectConfig) -> QCResult:
             )
         for did, group in frame.groupby("dispute_id", sort=False, dropna=False):
             did = str(did)
-            orders = pd.to_numeric(group["utterance_order"], errors="coerce")
+            raw_orders = display_order_values(group)
+            orders = pd.to_numeric(raw_orders, errors="coerce")
             rows = [int(i) + 2 for i in group.index]
             if orders.isna().any():
-                result.errors.append(f"{sheet} dispute {did}: nonnumeric utterance_order at rows {rows}.")
+                result.errors.append(f"{sheet} dispute {did}: incomplete or nonnumeric display order at rows {rows}.")
                 continue
             if not (orders == orders.astype(int)).all():
-                result.errors.append(f"{sheet} dispute {did}: utterance_order must contain integers; rows {rows}.")
+                result.errors.append(f"{sheet} dispute {did}: display order must contain integers; rows {rows}.")
                 continue
             actual = orders.astype(int).tolist()
             expected = list(range(min(actual), max(actual) + 1))
-            if actual != expected:
+            if sorted(actual) != expected:
                 result.errors.append(
-                    f"{sheet} dispute {did}: utterance_order must be strictly increasing and gap-free; rows {rows}, values {actual}."
+                    f"{sheet} dispute {did}: display order must be unique and gap-free; rows {rows}, values {actual}."
                 )
             positions = frame.index[frame["dispute_id"].astype(str) == did].tolist()
             if positions != list(range(min(positions), max(positions) + 1)):
                 result.errors.append(f"{sheet}: dispute {did} is interleaved at rows {[i + 2 for i in positions]}.")
             context = group[group["utterance_role"] == "context"]
-            if len(context) != 1:
-                result.errors.append(f"{sheet} dispute {did}: expected exactly one context row; found {len(context)}.")
-            elif context.index[0] != group.index[0]:
+            if len(context) > 1:
+                result.errors.append(f"{sheet} dispute {did}: expected at most one context row; found {len(context)}.")
+            elif len(context) == 1 and context.index[0] != group.index[0]:
                 result.errors.append(f"{sheet} dispute {did}: context row must be first.")
             if not context.empty:
                 annotation_columns = (ANNOTATION_COLUMNS | LEGACY_SOURCE_ANNOTATION_COLUMNS) & set(context.columns)
@@ -104,10 +125,12 @@ def validate_inputs(config: ProjectConfig) -> QCResult:
                         f"{sheet} dispute {did}: context annotation fields are not blank: {', '.join(sorted(nonblank))}."
                     )
             substantive = group[group["utterance_role"] == "utterance"]
-            substantive_orders = pd.to_numeric(substantive["utterance_order"], errors="coerce")
-            if substantive_orders.isna().any() or not substantive_orders.is_monotonic_increasing:
+            substantive_orders = pd.to_numeric(display_order_values(substantive), errors="coerce")
+            if substantive_orders.isna().any():
                 result.errors.append(f"{sheet} dispute {did}: substantive ordering is incoherent.")
-            id_to_order = {str(r["utterance_id"]): int(r["utterance_order"]) for _, r in group.iterrows()}
+            id_to_order = {
+                str(r["utterance_id"]): int(order) for (_, r), order in zip(group.iterrows(), orders, strict=True)
+            }
             for idx, row in group.iterrows():
                 target = row["reply_to_utterance_id"]
                 if pd.isna(target) or not str(target).strip():
@@ -118,10 +141,10 @@ def validate_inputs(config: ProjectConfig) -> QCResult:
                         f"{sheet} row {idx + 2} ({row['utterance_id']}): reply target {target!r} is not available "
                         f"in this dispute; target context will not be shown."
                     )
-                elif id_to_order[target] >= int(row["utterance_order"]):
+                elif id_to_order[target] >= int(orders.loc[idx]):
                     result.warnings.append(
                         f"{sheet} row {idx + 2} ({row['utterance_id']}): reply target {target!r} has a later "
-                        "utterance_order (documented final-state reconstruction artifact); future text remains hidden."
+                        "display order (documented final-state reconstruction artifact); future text remains hidden."
                     )
             normalized: dict[str, list[tuple[int, str]]] = {}
             for idx, row in group.iterrows():

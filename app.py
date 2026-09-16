@@ -12,7 +12,7 @@ import streamlit as st
 from wikidisputes_ui.codebook import file_fingerprint, load_codebook, schema_id
 from wikidisputes_ui.config import load_config
 from wikidisputes_ui.export import build_export, safe_export_name
-from wikidisputes_ui.ingest import article_title, read_gold
+from wikidisputes_ui.ingest import article_title, display_order, read_gold
 from wikidisputes_ui.models import (
     BASE_BINARY,
     KS_FIELDS,
@@ -57,7 +57,7 @@ def resources(config_file: str, codebook_hash: str, gold_hash: str):
     codebook = load_codebook(config.codebook_path, config.schema_sheet)
     dataset = read_gold(config.gold_path, config.annotation_sheet)
     storage = Storage(config.database_path)
-    reconcile_annotation_keys(storage, dataset)
+    reconcile_annotation_keys(storage, dataset, config.root / "reports" / "gold_reconciliation.md")
     storage.register_schema(
         schema_id(codebook.file_hash), codebook.file_hash, codebook.source_filename, config.schema_locked
     )
@@ -170,7 +170,7 @@ def utterance_choices(dispute_id: str) -> dict[str, str]:
         status = "Submitted" if uid in submitted else "Not submitted"
         text = " ".join(str(turn["utterance_text"]).split())
         preview = text if len(text) <= 90 else f"{text[:87]}…"
-        label = f"#{int(turn['utterance_order'])} · {turn['speaker_id']} · {status} · {preview} · {current_id}"
+        label = f"#{display_order(turn)} · {turn['speaker_id']} · {status} · {preview} · {current_id}"
         choices[label] = uid
     return choices
 
@@ -186,14 +186,14 @@ def focal_reply_description(dispute_id: str, source_row) -> str | None:
         return f"Replies to utterance ID {target_id} (target unavailable)"
     target = matches.iloc[0]
 
-    if int(target["utterance_order"]) >= int(source_row["utterance_order"]):
+    if display_order(target) >= display_order(source_row):
         return "Reply target reconstructed from final state; later target remains hidden."
 
     raw_speaker = target.get("speaker_id")
     speaker = "" if raw_speaker is None else str(raw_speaker).strip()
     if speaker.casefold() in {"", "nan", "<na>", "none"}:
         speaker = "unknown speaker"
-    return f"Replies to #{int(target['utterance_order'])} · {speaker} · ID {target_id}"
+    return f"Replies to #{display_order(target)} · {speaker} · ID {target_id}"
 
 
 if "page" not in st.session_state:
@@ -249,7 +249,7 @@ if st.session_state.page == "dispute":
         go("home")
         st.rerun()
     for _, turn in dataset.full_dispute(did).iterrows():
-        prior_comment(turn, (f"#{int(turn['utterance_order'])}",))
+        prior_comment(turn, (f"#{display_order(turn)}",))
     existing_row = next((r for r in dispute_rows if str(r["dispute_id"]) == did), None)
     existing = {} if existing_row is None else json.loads(existing_row["payload_json"])
     tasks = TaskCounter()
@@ -306,7 +306,7 @@ if matches.empty:
     st.error("Selected utterance is not annotatable.")
     st.stop()
 row = matches.iloc[0]
-did, order = str(row["dispute_id"]), int(row["utterance_order"])
+did, order = str(row["dispute_id"]), display_order(row)
 prior = dataset.displayable_prior_context(did, order)
 current = storage.current_utterance(coder, uid)
 defaults = {} if current is None else current["payload"]
@@ -357,7 +357,7 @@ with reading.container(height=650, border=False, key="utterance_reading_pane"):
     if prior.empty:
         st.caption("No earlier conversation. Future turns are never shown here.")
     for _, turn in prior.iterrows():
-        badges = (f"#{int(turn['utterance_order'])}",)
+        badges = (f"#{display_order(turn)}",)
         if turn["utterance_role"] == "context":
             badges += ("Context — not annotated",)
         else:
@@ -492,7 +492,7 @@ with coding:
                 elapsed_wall_seconds=time.monotonic() - st.session_state.utterance_timer_start,
             )
             turns = dataset.annotatable_in_dispute(did)
-            later = turns[turns["utterance_order"] > order]
+            later = turns[turns["_display_order"] > order]
             pending = later[~later["_annotation_key"].astype(str).isin(set(submitted) | {uid})]
             if not pending.empty:
                 go("utterance", uid=str(pending.iloc[0]["_annotation_key"]), did=did)

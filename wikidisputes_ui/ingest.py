@@ -20,6 +20,7 @@ REQUIRED_COLUMNS = {
     "utterance_type",
     "utterance_text",
 }
+DISPLAY_ORDER_COLUMNS = ("substantive_order", "utterance_order")
 ARTICLE_COLUMNS = ("article_title", "source_page_title", "dispute_label")
 ANNOTATION_COLUMNS = {
     "coder_id",
@@ -96,35 +97,45 @@ class Dataset:
     source_rows: pd.DataFrame
 
     def __post_init__(self) -> None:
+        self.source_rows = self.source_rows.copy()
+        if "_source_row" not in self.source_rows:
+            self.source_rows["_source_row"] = range(2, len(self.source_rows) + 2)
         if "_annotation_key" not in self.source_rows:
-            self.source_rows = self.source_rows.copy()
             self.source_rows["_annotation_key"] = self.source_rows.apply(stable_annotation_key, axis=1)
+        # Global navigation retains the workbook's first dispute appearance; only
+        # rows within one dispute are reordered by the canonical display sequence.
+        self.source_rows["_dispute_rank"] = pd.factorize(self.source_rows["dispute_id"], sort=False)[0]
+        self.source_rows["_display_order"] = display_order_values(self.source_rows)
+
+    @staticmethod
+    def _ordered(rows: pd.DataFrame) -> pd.DataFrame:
+        return rows.sort_values(["_dispute_rank", "_display_order", "_source_row"], kind="stable").copy()
 
     @property
     def annotatable_rows(self) -> pd.DataFrame:
-        return self.source_rows[self.source_rows["utterance_role"] == "utterance"].copy()
+        return self._ordered(self.source_rows[self.source_rows["utterance_role"] == "utterance"])
 
     @property
     def context_rows(self) -> pd.DataFrame:
-        return self.source_rows[self.source_rows["utterance_role"] == "context"].copy()
+        return self._ordered(self.source_rows[self.source_rows["utterance_role"] == "context"])
 
     def rows_in_dispute(self, dispute_id: str) -> pd.DataFrame:
-        return self.source_rows[self.source_rows["dispute_id"].astype(str) == str(dispute_id)].copy()
+        return self._ordered(self.source_rows[self.source_rows["dispute_id"].astype(str) == str(dispute_id)])
 
     def annotatable_in_dispute(self, dispute_id: str) -> pd.DataFrame:
         rows = self.rows_in_dispute(dispute_id)
         return rows[rows["utterance_role"] == "utterance"].copy()
 
-    def displayable_prior_context(self, dispute_id: str, utterance_order: int) -> pd.DataFrame:
+    def displayable_prior_context(self, dispute_id: str, display_order: int) -> pd.DataFrame:
         rows = self.rows_in_dispute(dispute_id)
-        return rows[rows["utterance_order"] < utterance_order].copy()
+        return rows[rows["_display_order"] < display_order].copy()
 
-    def earlier_annotatable_turns(self, dispute_id: str, utterance_order: int) -> pd.DataFrame:
-        rows = self.displayable_prior_context(dispute_id, utterance_order)
+    def earlier_annotatable_turns(self, dispute_id: str, display_order: int) -> pd.DataFrame:
+        rows = self.displayable_prior_context(dispute_id, display_order)
         return rows[rows["utterance_role"] == "utterance"].copy()
 
-    def prior_context(self, dispute_id: str, utterance_order: int) -> pd.DataFrame:
-        return self.displayable_prior_context(dispute_id, utterance_order)
+    def prior_context(self, dispute_id: str, display_order: int) -> pd.DataFrame:
+        return self.displayable_prior_context(dispute_id, display_order)
 
     def full_dispute(self, dispute_id: str) -> pd.DataFrame:
         return self.rows_in_dispute(dispute_id)
@@ -132,10 +143,53 @@ class Dataset:
 
 def read_gold(path: str | Path, annotation_sheet: str = "Gold_Annotation") -> Dataset:
     frame = pd.read_excel(path, sheet_name=annotation_sheet, dtype=object)
-    frame["utterance_order"] = pd.to_numeric(frame["utterance_order"], errors="raise").astype(int)
     frame["_source_row"] = range(2, len(frame) + 2)
     frame["_annotation_key"] = frame.apply(stable_annotation_key, axis=1)
     return Dataset(frame)
+
+
+def _blank_to_na(values: pd.Series) -> pd.Series:
+    return values.map(
+        lambda value: pd.NA if pd.isna(value) or (isinstance(value, str) and not value.strip()) else value
+    )
+
+
+def display_order_values(frame: pd.DataFrame) -> pd.Series:
+    """Return the source-supplied display order, preferring substantive_order.
+
+    ``utterance_order`` remains a compatibility fallback for legacy Gold files.  This
+    fallback is selected for a whole dispute, never mixed row by row: a legacy
+    context heading may have no substantive order while its utterances do. This
+    deliberately does not invent an order for a missing value; input QC reports it.
+    """
+    substantive = (
+        _blank_to_na(frame["substantive_order"])
+        if "substantive_order" in frame
+        else pd.Series(pd.NA, index=frame.index, dtype=object)
+    )
+    legacy = (
+        _blank_to_na(frame["utterance_order"])
+        if "utterance_order" in frame
+        else pd.Series(pd.NA, index=frame.index, dtype=object)
+    )
+    result = pd.Series(pd.NA, index=frame.index, dtype=object)
+    groups = frame.groupby("dispute_id", sort=False, dropna=False) if "dispute_id" in frame else [(None, frame)]
+    for _, group in groups:
+        indices = group.index
+        # A complete substantive sequence is canonical. Otherwise use the complete
+        # legacy sequence (or leave missing values for validation to report).
+        result.loc[indices] = (
+            substantive.loc[indices] if substantive.loc[indices].notna().all() else legacy.loc[indices]
+        )
+    return result
+
+
+def display_order(row: pd.Series) -> int:
+    """Read a validated canonical display order for labels and chronology."""
+    value = row.get("_display_order")
+    if value is None or pd.isna(value):
+        raise ValueError("Gold row has no complete display order.")
+    return int(value)
 
 
 def stable_annotation_key(row: pd.Series) -> str:
