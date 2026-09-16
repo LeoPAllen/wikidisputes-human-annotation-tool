@@ -94,6 +94,11 @@ if coder is None:
 frame = dataset.annotatable_rows
 all_ids = set(frame["_annotation_key"].astype(str))
 current_rows = storage.rows("utterance_annotations", coder)
+needs_rereview = {
+    str(annotation_row["utterance_id"])
+    for annotation_row in current_rows
+    if str(annotation_row["utterance_id"]) in all_ids and annotation_row["status"] == "needs_rereview"
+}
 submitted = {}
 for annotation_row in current_rows:
     payload = json.loads(annotation_row["payload_json"])
@@ -167,7 +172,12 @@ def utterance_choices(dispute_id: str) -> dict[str, str]:
     for _, turn in dataset.annotatable_in_dispute(dispute_id).iterrows():
         uid = str(turn["_annotation_key"])
         current_id = str(turn["utterance_id"])
-        status = "Submitted" if uid in submitted else "Not submitted"
+        if uid in submitted:
+            status = "Submitted"
+        elif uid in needs_rereview:
+            status = "Needs re-review"
+        else:
+            status = "Not submitted"
         text = " ".join(str(turn["utterance_text"]).split())
         preview = text if len(text) <= 90 else f"{text[:87]}…"
         label = f"#{display_order(turn)} · {turn['speaker_id']} · {status} · {preview} · {current_id}"
@@ -202,6 +212,7 @@ if "page" not in st.session_state:
 if st.session_state.page == "home":
     st.title("Annotation workspace")
     st.metric("Utterances submitted", f"{len(submitted)} / {len(frame)}")
+    st.metric("Needs re-review", len(needs_rereview))
     st.metric("Disputes finalized", f"{len(completed_disputes)} / {len(dispute_ids)}")
     choices = dispute_choices()
     selected = st.selectbox("Article / dispute", list(choices), index=None, placeholder="Choose an article and dispute")
@@ -309,6 +320,11 @@ row = matches.iloc[0]
 did, order = str(row["dispute_id"]), display_order(row)
 prior = dataset.displayable_prior_context(did, order)
 current = storage.current_utterance(coder, uid)
+if current is not None and current["status"] == "needs_rereview":
+    st.warning(
+        "This annotation needs re-review because its coding context changed. "
+        "Your previous answers are pre-filled below."
+    )
 defaults = {} if current is None else current["payload"]
 
 if st.session_state.get("timer_uid") != uid:
@@ -363,7 +379,9 @@ with reading.container(height=650, border=False, key="utterance_reading_pane"):
         else:
             prior_uid = str(turn["_annotation_key"])
             prior_annotation = submitted.get(prior_uid)
-            if prior_annotation is None:
+            if prior_uid in needs_rereview:
+                badges += ("Needs re-review",)
+            elif prior_annotation is None:
                 badges += ("Not annotated",)
             else:
                 prior_payload = json.loads(prior_annotation["payload_json"])

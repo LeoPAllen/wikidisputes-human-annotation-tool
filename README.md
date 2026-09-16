@@ -1,7 +1,8 @@
 # WikiDisputes human annotation tool
 
-A private, local Streamlit workflow for coding substantive utterances from the `Gold_Annotation` worksheet in
-`data/source/gold_input.xlsx`. Context rows are display-only and source order is preserved.
+A private, local Streamlit workflow for coding utterances from the `Gold_Annotation` worksheet in
+`data/source/gold_input.xlsx`. `substantive_order` is the canonical display, context, and navigation sequence.
+`utterance_order` is chronology metadata and may be null; Gold files may contain zero display-only context rows.
 
 ## Setup and run
 
@@ -52,9 +53,19 @@ Older utterance records missing `KS_new_evidence` require re-review; older dispu
 require completion. Existing event history is retained.
 
 To update inputs, replace `data/source/gold_input.xlsx` and/or `data/source/codebook.xlsx`, then restart Streamlit.
-Annotations follow the Gold stable utterance key, so source edits and reordering do not reset SQLite. Coders may mark a
-substantive unit “Malformed utterance / not reliably one speaker-turn”; construct labels then become optional, existing
-answers are retained, and the unit remains in the queue and export.
+
+Annotations follow the Gold stable utterance key. Gold reconciliation compares each focal utterance and its ordered
+visible prior coding context. If that context is unchanged, an existing submitted annotation remains current. If focal
+text or prior visible context changes because of source edits or reordering, the existing answers are retained but the
+current annotation is marked `needs_rereview` and must be reviewed and submitted again. Newly annotatable rows enter
+the normal annotation queue.
+
+When a Gold change affects a dispute's coding context, its current dispute-level decision may be invalidated while
+append-only annotation event history is retained. Gold reconciliation creates a SQLite backup before mutating current
+annotation state.
+
+Coders may mark a unit “Malformed utterance / not reliably one speaker-turn”; construct labels then become optional,
+existing answers are retained, and the unit remains in the queue and export.
 
 ## Verification
 
