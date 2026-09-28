@@ -73,3 +73,16 @@ def test_partial_substantive_order_uses_the_complete_legacy_sequence(synthetic_p
     result = validate_inputs(synthetic_project)
     assert not result.blocking
     assert read_gold(synthetic_project.gold_path).source_rows["_display_order"].tolist() == [1, 2, 3]
+
+
+def test_numeric_string_display_order_is_usable_without_changing_source(synthetic_project, source_rows):
+    frame = source_rows.copy()
+    frame["substantive_order"] = ["1", 2, 3]
+    with pd.ExcelWriter(synthetic_project.gold_path, engine="openpyxl") as writer:
+        frame.to_excel(writer, sheet_name="Gold_Annotation", index=False)
+
+    assert not validate_inputs(synthetic_project).blocking
+    data = read_gold(synthetic_project.gold_path)
+    assert data.source_rows["substantive_order"].iloc[0] == "1"
+    assert data.source_rows["_display_order"].tolist() == [1, 2, 3]
+    assert data.displayable_prior_context("D1", 3)["utterance_id"].tolist() == ["ctx1", "u1"]

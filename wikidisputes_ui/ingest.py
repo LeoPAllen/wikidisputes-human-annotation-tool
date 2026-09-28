@@ -105,7 +105,9 @@ class Dataset:
         # Global navigation retains the workbook's first dispute appearance; only
         # rows within one dispute are reordered by the canonical display sequence.
         self.source_rows["_dispute_rank"] = pd.factorize(self.source_rows["dispute_id"], sort=False)[0]
-        self.source_rows["_display_order"] = display_order_values(self.source_rows)
+        # Excel may store some otherwise valid order cells as numeric strings.
+        # Keep the source column verbatim; use numbers only in the derived view.
+        self.source_rows["_display_order"] = pd.to_numeric(display_order_values(self.source_rows), errors="raise")
 
     @staticmethod
     def _ordered(rows: pd.DataFrame) -> pd.DataFrame:
