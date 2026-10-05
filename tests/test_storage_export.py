@@ -16,7 +16,8 @@ def current_payload(**changes):
         "KS_new_evidence": None,
         "KS_restaking": None,
         "KS_bounding": None,
-        "KI_present": 0,
+        "KI_coordinating_edits": 0,
+        "KI_compromise": 0,
         "C_off_topic_shift": 0,
         "C_interpersonal_attack_or_disrespect": 0,
         "C_formal_governance_action": 0,
@@ -168,6 +169,10 @@ def test_dispute_completion_export_propagation_and_isolation(tmp_path, synthetic
     row = frame[frame.utterance_id == "u1"].iloc[0]
     assert row.C_primary_dispute_object == "wording_or_representation"
     assert row.DV_dispute_resolution == 4
+    assert row.KI_coordinating_edits == 0
+    assert row.KI_compromise == 0
+    assert "KI_present" not in frame.columns
+    assert list(frame.columns).index("KI_coordinating_edits") < list(frame.columns).index("KI_compromise")
     assert frame.C_primary_dispute_object.eq("wording_or_representation").all()
     assert frame.DV_dispute_resolution.eq(4).all()
     assert pd.isna(row.KS_new_evidence)
@@ -308,6 +313,30 @@ def test_grounded_new_evidence_exports_as_integer(tmp_path, synthetic_project):
         tuple(book.dispute_objects),
     )
     assert pd.read_excel(BytesIO(data)).iloc[0].KS_new_evidence == 1
+
+
+def test_legacy_ki_present_source_column_is_filtered_from_export_metadata(tmp_path, synthetic_project):
+    storage = Storage(tmp_path / "db.sqlite")
+    save(
+        storage,
+        payload=current_payload(KI_coordinating_edits=1, KI_compromise=0),
+    )
+    dataset = read_gold(synthetic_project.gold_path)
+    dataset.source_rows["KI_present"] = 1
+    book = load_codebook(synthetic_project.codebook_path)
+    data = build_export(
+        storage,
+        dataset,
+        "coder_1",
+        "new",
+        "new-hash",
+        tuple(book.fields),
+        tuple(book.dispute_objects),
+    )
+    frame = pd.read_excel(BytesIO(data), sheet_name="Gold_Annotations")
+    assert "KI_present" not in frame.columns
+    assert frame.loc[0, "KI_coordinating_edits"] == 1
+    assert frame.loc[0, "KI_compromise"] == 0
 
 
 def test_old_field_payload_is_preserved_but_not_exported(tmp_path, synthetic_project):

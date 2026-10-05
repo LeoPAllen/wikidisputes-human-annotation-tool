@@ -2,9 +2,16 @@ import json
 import time
 
 import pandas as pd
+import pytest
 from streamlit.testing.v1 import AppTest
 
+from wikidisputes_ui.models import is_current_submitted_utterance
 from wikidisputes_ui.storage import Storage
+
+KI_COORDINATING_QUESTION = "Does the utterance coordinate a concrete change to the Wikipedia page?"
+KI_COMPROMISE_QUESTION = (
+    "Does the utterance offer a middle ground or accommodation intended to bridge the disagreement?"
+)
 
 
 def configured(monkeypatch, project):
@@ -39,7 +46,8 @@ def current_payload(**changes):
         "KS_new_evidence": None,
         "KS_restaking": None,
         "KS_bounding": None,
-        "KI_present": 0,
+        "KI_coordinating_edits": 0,
+        "KI_compromise": 0,
         "C_off_topic_shift": 0,
         "C_interpersonal_attack_or_disrespect": 0,
         "C_formal_governance_action": 0,
@@ -68,7 +76,7 @@ def save_payload(storage, payload, *, uid="u1", schema_hash="old-hash"):
     )
 
 
-def answer_all(app, ks=0, ki=0):
+def answer_all(app, ks=0, ki_coordinating_edits=0, ki_compromise=0):
     radio(app, "Does this utterance stake knowledge?").set_value(ks)
     app = app.run()
     if ks:
@@ -79,7 +87,8 @@ def answer_all(app, ks=0, ki=0):
             "Does it bound the claim?",
         ):
             radio(app, label).set_value(0)
-    radio(app, "Does this utterance integrate knowledge?").set_value(ki)
+    radio(app, KI_COORDINATING_QUESTION).set_value(ki_coordinating_edits)
+    radio(app, KI_COMPROMISE_QUESTION).set_value(ki_compromise)
     app = app.run()
     for label in (
         "Does this shift off topic?",
@@ -105,8 +114,14 @@ def test_inline_workflow_has_no_stages_and_conditional_children(monkeypatch, syn
     assert confidence.value is None
     labels = {item.label for item in app.radio}
     assert "Does it make its reasoning explicit?" not in labels
+    assert KI_COORDINATING_QUESTION in labels
+    assert KI_COMPROMISE_QUESTION in labels
+    assert "Does this utterance integrate knowledge?" not in labels
     radio(app, "Does this utterance stake knowledge?").set_value(1)
-    radio(app, "Does this utterance integrate knowledge?").set_value(1)
+    radio(app, KI_COORDINATING_QUESTION).set_value(1)
+    app = app.run()
+    assert radio(app, KI_COMPROMISE_QUESTION).value is None
+    radio(app, KI_COMPROMISE_QUESTION).set_value(1)
     app = app.run()
     labels = {item.label for item in app.radio}
     assert len(set(KS_CHILD_LABELS) & labels) == 4
@@ -119,13 +134,16 @@ def test_inline_workflow_has_no_stages_and_conditional_children(monkeypatch, syn
 
 def test_question_text_is_loaded_from_workbook(monkeypatch, synthetic_project):
     frame = pd.read_excel(synthetic_project.codebook_path, sheet_name="Core_Schema")
-    frame.loc[frame.Label == "KS_present", "Question"] = "Workbook-specific KS wording?"
+    frame.loc[frame.Label == "KI_compromise", "Question"] = "Workbook-specific KI wording?"
+    frame.loc[frame.Label == "KI_compromise", "Definition"] = "Workbook-specific KI guidance."
     with pd.ExcelWriter(synthetic_project.codebook_path, engine="openpyxl") as writer:
         frame.to_excel(writer, sheet_name="Core_Schema", index=False)
     app = enter(configured(monkeypatch, synthetic_project))
     labels = {item.label for item in app.radio}
-    assert "Workbook-specific KS wording?" in labels
-    assert "Does this utterance stake knowledge?" not in labels
+    assert "Workbook-specific KI wording?" in labels
+    assert KI_COORDINATING_QUESTION in labels
+    assert "Does this utterance integrate knowledge?" not in labels
+    assert "Workbook-specific KI guidance." in {item.value for item in app.caption}
 
 
 def test_resolution_anchor_text_is_loaded_from_workbook(monkeypatch, synthetic_project):
@@ -164,7 +182,28 @@ def test_question_only_hash_change_does_not_reset_progress(monkeypatch, syntheti
     assert any("Submitted" in option and option.startswith("#2") for option in utterance.options)
 
 
-def test_old_payload_is_incomplete_but_surviving_fields_prepopulate(monkeypatch, synthetic_project):
+@pytest.mark.parametrize("column", ["Question", "Definition"])
+def test_codebook_text_edits_do_not_reset_current_annotation(monkeypatch, synthetic_project, column):
+    storage = Storage(synthetic_project.database_path)
+    save_payload(storage, current_payload(), schema_hash="before-text-edit")
+    frame = pd.read_excel(synthetic_project.codebook_path, sheet_name="Core_Schema")
+    frame.loc[frame.Label == "KI_compromise", column] = f"Updated workbook {column.lower()} text."
+    with pd.ExcelWriter(synthetic_project.codebook_path, engine="openpyxl") as writer:
+        frame.to_excel(writer, sheet_name="Core_Schema", index=False)
+
+    app = configured(monkeypatch, synthetic_project)
+
+    assert app.metric[0].value == "1 / 2"
+    dispute = next(item for item in app.selectbox if item.label == "Article / dispute")
+    dispute.set_value(dispute.options[0])
+    app = app.run()
+    utterance = next(item for item in app.selectbox if item.label == "Utterance")
+    assert any("Submitted" in option and option.startswith("#2") for option in utterance.options)
+
+
+def test_old_ki_present_payload_preserves_other_answers_without_prefilling_either_dimension(
+    monkeypatch, synthetic_project
+):
     storage = Storage(synthetic_project.database_path)
     save_payload(
         storage,
@@ -182,12 +221,40 @@ def test_old_payload_is_incomplete_but_surviving_fields_prepopulate(monkeypatch,
             "review_flag": 0,
         },
     )
+    old_events = Storage(synthetic_project.database_path).rows("utterance_annotation_events", "coder_01")
+    assert len(old_events) == 1
+    old_event = old_events[0].copy()
     app = configured(monkeypatch, synthetic_project)
     assert app.metric[0].value == "0 / 2"
     app = next(button for button in app.button if button.label == "Resume annotation").click().run()
     assert radio(app, "Does this utterance stake knowledge?").value == 1
     assert radio(app, "Does it restate an earlier position?").value == 0
-    assert radio(app, "Does this utterance integrate knowledge?").value == 1
+    assert radio(app, KI_COORDINATING_QUESTION).value is None
+    assert radio(app, KI_COMPROMISE_QUESTION).value is None
+    assert radio(app, "Does this shift off topic?").value == 0
+    assert radio(app, "How confident are you in this utterance annotation?").value == 3
+    assert "Does this utterance integrate knowledge?" not in {item.label for item in app.radio}
+
+    radio(app, "Does it make its reasoning explicit?").set_value(1)
+    radio(app, "Does it ground its position?").set_value(0)
+    radio(app, "Does it bound the claim?").set_value(0)
+    radio(app, KI_COORDINATING_QUESTION).set_value(0)
+    radio(app, KI_COMPROMISE_QUESTION).set_value(1)
+    app = app.run()
+    app = next(button for button in app.button if button.label == "Submit and next").click().run()
+
+    storage = Storage(synthetic_project.database_path)
+    current = storage.current_utterance("coder_01", "u1")
+    assert current["status"] == "submitted"
+    assert is_current_submitted_utterance(current["status"], current["payload"])
+    assert current["payload"]["KI_coordinating_edits"] == 0
+    assert current["payload"]["KI_compromise"] == 1
+    assert "KI_present" not in current["payload"]
+    events = storage.rows("utterance_annotation_events", "coder_01")
+    assert len(events) == 2
+    assert events[0] == old_event
+    assert events[1]["event_type"] == "revise"
+    assert "KI_present" not in json.loads(events[1]["payload_json"])
 
 
 def test_obsolete_dispute_object_does_not_count_as_complete(monkeypatch, synthetic_project):
@@ -216,7 +283,9 @@ def test_valid_dispute_decision_waits_for_current_utterances(monkeypatch, synthe
     storage = Storage(synthetic_project.database_path)
     save_payload(storage, current_payload(), uid="u1")
     stale = current_payload()
-    stale.pop("KS_new_evidence")
+    stale.pop("KI_coordinating_edits")
+    stale.pop("KI_compromise")
+    stale["KI_present"] = 0
     save_payload(storage, stale, uid="u2")
     storage.save_dispute(
         coder="coder_01",
@@ -231,8 +300,13 @@ def test_valid_dispute_decision_waits_for_current_utterances(monkeypatch, synthe
     app = configured(monkeypatch, synthetic_project)
     assert [(item.label, item.value) for item in app.metric] == [
         ("Utterances submitted", "1 / 2"),
+        ("Needs re-review", "0"),
         ("Disputes finalized", "0 / 1"),
     ]
+    assert json.loads(storage.rows("dispute_annotations", "coder_01")[0]["payload_json"]) == {
+        "C_primary_dispute_object": "uncertain",
+        "DV_dispute_resolution": 3,
+    }
     dispute = next(item for item in app.selectbox if item.label == "Article / dispute")
     assert "In progress" in dispute.options[0]
 
@@ -256,6 +330,11 @@ def test_landing_and_annotation_navigation_target_specific_utterances(monkeypatc
     rendered = " ".join(str(item.value) for item in app.markdown)
     assert "Replies to #2 · A · ID u1" in rendered
 
+    app = AppTest.from_file("app.py", default_timeout=10)
+    app.session_state["page"] = "utterance"
+    app.session_state["unit_id"] = "u2"
+    app.session_state["dispute_id"] = "D1"
+    app = app.run()
     target = next(item for item in app.selectbox if item.label == "Navigate to utterance")
     target.set_value(next(option for option in target.options if option.startswith("#2")))
     app = app.run()
@@ -303,7 +382,7 @@ def test_full_dispute_smoke_and_object_only_payload(monkeypatch, synthetic_proje
     app = answer_all(app)
     app = next(b for b in app.button if b.label == "Submit and next").click().run()
     assert app.session_state["unit_id"] == "u2"
-    app = answer_all(app, ks=1, ki=1)
+    app = answer_all(app, ks=1, ki_coordinating_edits=1, ki_compromise=1)
     app = next(b for b in app.button if b.label == "Submit and next").click().run()
     assert app.title[0].value == "Final dispute decision"
     first_opened_at = app.session_state["dispute_opened_at"]
@@ -311,6 +390,7 @@ def test_full_dispute_smoke_and_object_only_payload(monkeypatch, synthetic_proje
     workspace = configured(monkeypatch, synthetic_project)
     assert [(item.label, item.value) for item in workspace.metric] == [
         ("Utterances submitted", "2 / 2"),
+        ("Needs re-review", "0"),
         ("Disputes finalized", "0 / 1"),
     ]
     dispute = next(item for item in workspace.selectbox if item.label == "Article / dispute")
@@ -348,6 +428,7 @@ def test_full_dispute_smoke_and_object_only_payload(monkeypatch, synthetic_proje
     assert row["elapsed_wall_seconds"] >= 5
     assert [(item.label, item.value) for item in app.metric] == [
         ("Utterances submitted", "2 / 2"),
+        ("Needs re-review", "0"),
         ("Disputes finalized", "1 / 1"),
     ]
     for key in ("dispute_timer_did", "dispute_timer_start", "dispute_opened_at"):
@@ -358,6 +439,66 @@ def test_full_dispute_smoke_and_object_only_payload(monkeypatch, synthetic_proje
             "answered_fields_json"
         ]
     ) == ["C_primary_dispute_object", "DV_dispute_resolution"]
+
+
+@pytest.mark.parametrize(("ki_coordinating_edits", "ki_compromise"), [(1, 0), (0, 1), (1, 1)])
+def test_ki_dimensions_are_answered_independently_in_the_ui(
+    monkeypatch, synthetic_project, ki_coordinating_edits, ki_compromise
+):
+    app = enter(configured(monkeypatch, synthetic_project))
+    assert radio(app, KI_COORDINATING_QUESTION).value is None
+    assert radio(app, KI_COMPROMISE_QUESTION).value is None
+
+    radio(app, KI_COORDINATING_QUESTION).set_value(ki_coordinating_edits)
+    app = app.run()
+    assert radio(app, KI_COMPROMISE_QUESTION).value is None
+    assert KI_COORDINATING_QUESTION in {item.label for item in app.radio}
+    assert KI_COMPROMISE_QUESTION in {item.label for item in app.radio}
+
+    app = answer_all(
+        app,
+        ki_coordinating_edits=ki_coordinating_edits,
+        ki_compromise=ki_compromise,
+    )
+    app = next(button for button in app.button if button.label == "Submit and next").click().run()
+    saved = Storage(synthetic_project.database_path).current_utterance("coder_01", "u1")
+    assert saved["payload"]["KI_coordinating_edits"] == ki_coordinating_edits
+    assert saved["payload"]["KI_compromise"] == ki_compromise
+
+
+@pytest.mark.parametrize(
+    ("missing_question", "answered_question", "missing_field"),
+    [
+        (KI_COORDINATING_QUESTION, KI_COMPROMISE_QUESTION, "KI_coordinating_edits"),
+        (KI_COMPROMISE_QUESTION, KI_COORDINATING_QUESTION, "KI_compromise"),
+    ],
+)
+def test_fresh_utterance_requires_explicit_answers_to_both_ki_questions(
+    monkeypatch, synthetic_project, missing_question, answered_question, missing_field
+):
+    app = enter(configured(monkeypatch, synthetic_project))
+    radio(app, "Does this utterance stake knowledge?").set_value(0)
+    radio(app, answered_question).set_value(0)
+    for question in (
+        "Does this shift off topic?",
+        "Does this attack or disrespect a contributor?",
+        "Does this invoke formal governance?",
+    ):
+        radio(app, question).set_value(0)
+    radio(app, "How confident are you in this utterance annotation?").set_value(3)
+    radio(app, "Flag this utterance for review?").set_value(0)
+
+    app = next(button for button in app.button if button.label == "Submit and next").click().run()
+
+    assert any(f"Please answer: {missing_question}" in item.value for item in app.error)
+    storage = Storage(synthetic_project.database_path)
+    assert storage.current_utterance("coder_01", "u1") is None
+
+    radio(app, missing_question).set_value(0)
+    app = next(button for button in app.button if button.label == "Submit and next").click().run()
+    saved = storage.current_utterance("coder_01", "u1")
+    assert saved["status"] == "submitted"
+    assert saved["payload"][missing_field] == 0
 
 
 def test_dispute_timer_restarts_when_same_form_is_reopened(monkeypatch, synthetic_project):
@@ -412,6 +553,8 @@ def test_malformed_utterance_can_submit_without_construct_labels(monkeypatch, sy
     assert saved["status"] == "submitted"
     assert saved["payload"]["malformed_utterance"] is True
     assert saved["payload"]["KS_present"] is None
+    assert saved["payload"]["KI_coordinating_edits"] is None
+    assert saved["payload"]["KI_compromise"] is None
 
 
 def test_malformed_utterance_can_submit_construct_labels(monkeypatch, synthetic_project):
@@ -420,24 +563,36 @@ def test_malformed_utterance_can_submit_construct_labels(monkeypatch, synthetic_
         item for item in app.checkbox if item.label == "Malformed utterance / not reliably one speaker-turn"
     )
     app = malformed.check().run()
-    app = answer_all(app, ks=1, ki=1)
+    app = answer_all(app, ks=1, ki_coordinating_edits=1, ki_compromise=1)
     app = next(button for button in app.button if button.label == "Submit and next").click().run()
     saved = Storage(synthetic_project.database_path).current_utterance("coder_01", "u1")
     assert saved["status"] == "submitted"
     assert saved["payload"]["malformed_utterance"] is True
     assert saved["payload"]["KS_present"] == 1
-    assert saved["payload"]["KI_present"] == 1
+    assert saved["payload"]["KI_coordinating_edits"] == 1
+    assert saved["payload"]["KI_compromise"] == 1
     assert saved["payload"]["KS_explicit_reasoning"] == 0
 
 
-def test_earlier_conversation_shows_prior_ks_and_ki_labels(monkeypatch, synthetic_project):
+@pytest.mark.parametrize(
+    ("ki_coordinating_edits", "ki_compromise"),
+    [(1, 0), (0, 1), (1, 1), (0, 0)],
+)
+def test_prior_conversation_shows_one_ki_badge_when_either_dimension_is_yes(
+    monkeypatch, synthetic_project, ki_coordinating_edits, ki_compromise
+):
     app = enter(configured(monkeypatch, synthetic_project))
-    app = answer_all(app, ks=1, ki=0)
+    app = answer_all(
+        app,
+        ks=1,
+        ki_coordinating_edits=ki_coordinating_edits,
+        ki_compromise=ki_compromise,
+    )
     app = next(button for button in app.button if button.label == "Submit and next").click().run()
 
     rendered = " ".join(str(item.value) for item in app.markdown)
     assert '<span class="badge">KS</span>' in rendered
-    assert '<span class="badge">KI</span>' not in rendered
+    assert rendered.count('<span class="badge">KI</span>') == int(bool(ki_coordinating_edits or ki_compromise))
     assert "Context — not annotated" in rendered
 
 

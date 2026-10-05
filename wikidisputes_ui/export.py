@@ -26,7 +26,8 @@ INTEGER_COLUMNS = {
     "KS_new_evidence",
     "KS_restaking",
     "KS_bounding",
-    "KI_present",
+    "KI_coordinating_edits",
+    "KI_compromise",
     "C_off_topic_shift",
     "C_interpersonal_attack_or_disrespect",
     "C_formal_governance_action",
@@ -104,7 +105,7 @@ def build_export(
         )
         for did in dataset.annotatable_rows["dispute_id"].drop_duplicates().astype(str)
     }
-    schema_columns = list(dict.fromkeys(schema_fields))
+    schema_columns = [field for field in dict.fromkeys(schema_fields) if field != "KI_present"]
     source_columns = [
         key
         for key in dataset.source_rows.columns

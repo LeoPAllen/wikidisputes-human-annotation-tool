@@ -10,12 +10,13 @@ falls back to its complete `utterance_order` sequence as a whole dispute/file, n
 Context rows are display-only and never annotated; a dispute may also have no context row. Applicability depends only
 on the focal answers:
 
-- five binary parent/control fields always apply;
+- six binary parent/control fields always apply, including both independent KI dimensions;
 - four KS children apply when `KS_present=1`;
 - confidence, review flag, and one optional comment apply to every utterance.
 
 The model clears hidden children to null and removes them from `answered_fields`. KS and KI are independent.
-`KS_restaking` is a direct coder judgment based on visible prior discussion. `KI_present` has no child fields.
+`KS_restaking` is a direct coder judgment based on visible prior discussion. Overall KI is derived from the two current
+KI dimensions; the retired `KI_present` answer is never mapped to either dimension.
 
 Only when all substantive utterances in a dispute are submitted may the UI store the final dispute payload. That
 payload and its `answered_fields` contain only `C_primary_dispute_object`; allowed values come from its authoritative

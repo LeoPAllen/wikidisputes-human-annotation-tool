@@ -7,14 +7,13 @@ from typing import Any
 
 BASE_BINARY = (
     "KS_present",
-    "KI_present",
     "C_off_topic_shift",
     "C_interpersonal_attack_or_disrespect",
     "C_formal_governance_action",
 )
 KS_FIELDS = ("KS_explicit_reasoning", "KS_grounding", "KS_new_evidence", "KS_restaking", "KS_bounding")
-KI_FIELDS: tuple[str, ...] = ()
-CURRENT_UTTERANCE_SCHEMA_FIELDS = BASE_BINARY + KS_FIELDS
+KI_FIELDS = ("KI_coordinating_edits", "KI_compromise")
+CURRENT_UTTERANCE_SCHEMA_FIELDS = BASE_BINARY + KS_FIELDS + KI_FIELDS
 ANNOTATION_FIELDS = (
     BASE_BINARY
     + KS_FIELDS
@@ -45,7 +44,16 @@ class ValidationResult:
 
 def applicable_fields(values: dict[str, Any], context: ContextState | None = None, low_threshold: int = 2) -> set[str]:
     del context, low_threshold
-    applicable = set(BASE_BINARY) | {"malformed_utterance", "coder_confidence", "review_flag", "coder_notes"}
+    applicable = (
+        set(BASE_BINARY)
+        | set(KI_FIELDS)
+        | {
+            "malformed_utterance",
+            "coder_confidence",
+            "review_flag",
+            "coder_notes",
+        }
+    )
     if values.get("KS_present") == 1 or (values.get("malformed_utterance") is True and values.get("KS_present") != 0):
         applicable.update(set(KS_FIELDS) - {"KS_new_evidence"})
         if values.get("KS_grounding") == 1:
@@ -56,6 +64,11 @@ def applicable_fields(values: dict[str, Any], context: ContextState | None = Non
 def is_structurally_compatible_utterance(payload: dict[str, Any]) -> bool:
     """Return whether a stored payload contains every current utterance schema key."""
     return all(name in payload for name in CURRENT_UTTERANCE_SCHEMA_FIELDS)
+
+
+def derived_ki_present(values: dict[str, Any]) -> bool:
+    """Return whether either current KI dimension indicates integration."""
+    return values.get("KI_coordinating_edits") == 1 or values.get("KI_compromise") == 1
 
 
 def is_current_submitted_utterance(status: str, payload: dict[str, Any]) -> bool:
@@ -98,7 +111,7 @@ def normalize_and_validate(
     errors: dict[str, str] = {}
     required = {"coder_confidence", "review_flag"}
     if payload["malformed_utterance"] is not True:
-        required.update(BASE_BINARY)
+        required.update(BASE_BINARY + KI_FIELDS)
     if payload["malformed_utterance"] is not True and payload["KS_present"] == 1:
         required.update(set(KS_FIELDS) - {"KS_new_evidence"})
         if payload["KS_grounding"] == 1:
@@ -107,7 +120,7 @@ def normalize_and_validate(
         for name in required:
             if name not in answered_fields or payload.get(name) is None:
                 errors[name] = "An explicit response is required."
-    for name in BASE_BINARY + KS_FIELDS + ("review_flag",):
+    for name in BASE_BINARY + KS_FIELDS + KI_FIELDS + ("review_flag",):
         if payload.get(name) is not None and payload[name] not in (0, 1):
             errors[name] = "Choose No or Yes."
     if type(payload.get("malformed_utterance")) is not bool:

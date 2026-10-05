@@ -3,6 +3,7 @@ import pytest
 
 from wikidisputes_ui.codebook import EXPECTED_DISPUTE_OBJECTS, EXPECTED_LABELS, load_codebook
 from wikidisputes_ui.config import load_config
+from wikidisputes_ui.ingest import ANNOTATION_COLUMNS, LEGACY_SOURCE_ANNOTATION_COLUMNS
 
 
 def write_codebook(path, frame):
@@ -16,12 +17,19 @@ def test_authoritative_one_sheet_codebook(tmp_path, codebook_frame):
     book = load_codebook(path)
     assert tuple(book.fields) == EXPECTED_LABELS
     assert tuple(book.dispute_objects) == EXPECTED_DISPUTE_OBJECTS
-    assert "binary {0,1}" in book.fields["KI_present"].indicator
+    assert "binary {0,1}" in book.fields["KI_coordinating_edits"].indicator
+    assert "binary {0,1}" in book.fields["KI_compromise"].indicator
     assert book.fields["KS_restaking"].definition
     assert book.fields["KS_restaking"].rule
     assert book.fields["KS_restaking"].question == "Does it restate an earlier position?"
     assert book.dispute_objects["uncertain"] == ""
     assert book.resolution_labels[3] == "Partly resolved / unclear"
+
+
+def test_old_ki_present_column_is_legacy_annotation_data():
+    assert {"KI_coordinating_edits", "KI_compromise"} <= ANNOTATION_COLUMNS
+    assert "KI_present" not in ANNOTATION_COLUMNS
+    assert "KI_present" in LEGACY_SOURCE_ANNOTATION_COLUMNS
 
 
 def test_resolution_anchors_must_cover_five_values(tmp_path, codebook_frame):

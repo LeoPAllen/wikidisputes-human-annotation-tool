@@ -30,7 +30,8 @@ ANNOTATION_COLUMNS = {
     "KS_new_evidence",
     "KS_restaking",
     "KS_bounding",
-    "KI_present",
+    "KI_coordinating_edits",
+    "KI_compromise",
     "C_off_topic_shift",
     "C_interpersonal_attack_or_disrespect",
     "C_formal_governance_action",
@@ -44,6 +45,7 @@ ANNOTATION_COLUMNS = {
 
 # The immutable source workbook may retain blank columns from earlier schemas.
 LEGACY_ANNOTATION_COLUMNS = {
+    "KI_present",
     "KS_claim_present",
     "KS_evidence_reference",
     "KS_reasoning",

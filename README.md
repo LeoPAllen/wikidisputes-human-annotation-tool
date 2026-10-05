@@ -25,9 +25,12 @@ rules, examples, provenance, and dispute-object values/descriptions are read fro
 column. The whole-file SHA-256 remains audit metadata, while structural payload compatibility controls progress and
 export.
 
-Each opened dispute uses one continuous utterance screen. Five always-applicable questions have explicit No/Yes
-answers and no default. Answering Yes to KS reveals its inline KS questions; `KS_new_evidence` is required only when
-`KS_grounding` is Yes. KI is a standalone, independent field.
+Each opened dispute uses one continuous utterance screen. Six always-applicable questions have explicit No/Yes
+answers and no default: KS, the two KI dimensions, and three control fields. Answering Yes to KS reveals its inline KS
+questions; `KS_new_evidence` is required only when `KS_grounding` is Yes. `KI_coordinating_edits` and `KI_compromise`
+are separate, independent fields with no parent question. Overall Knowledge Integration is derived as their OR: it is
+1 when either dimension is 1. Historical `KI_present` answers are not automatically translated to either dimension;
+affected utterances require re-review.
 `KS_restaking` is entered by the coder from the visible earlier discussion and is not derived. Changing KS to No hides
 its children; normalized storage uses null for those inapplicable answers.
 

@@ -1,11 +1,14 @@
 import pytest
 
 from wikidisputes_ui.models import (
+    ANNOTATION_FIELDS,
     CURRENT_UTTERANCE_SCHEMA_FIELDS,
     KI_FIELDS,
     KS_FIELDS,
     applicable_fields,
+    derived_ki_present,
     is_current_dispute_decision,
+    is_current_submitted_utterance,
     is_structurally_compatible_utterance,
     normalize_and_validate,
 )
@@ -14,7 +17,8 @@ from wikidisputes_ui.models import (
 def base(**changes):
     values = {
         "KS_present": 0,
-        "KI_present": 0,
+        "KI_coordinating_edits": 0,
+        "KI_compromise": 0,
         "C_off_topic_shift": 0,
         "C_interpersonal_attack_or_disrespect": 0,
         "C_formal_governance_action": 0,
@@ -27,12 +31,68 @@ def base(**changes):
 
 
 def test_ks_and_ki_are_independent_and_can_cooccur():
-    values = base(KS_present=1, KI_present=1, **{name: 0 for name in KS_FIELDS})
+    values = base(KS_present=1, KI_coordinating_edits=1, KI_compromise=1, **{name: 0 for name in KS_FIELDS})
     result = normalize_and_validate(values, set(values))
     assert result.valid
     assert set(KS_FIELDS) - {"KS_new_evidence"} <= applicable_fields(values)
     assert "KS_new_evidence" not in applicable_fields(values)
-    assert KI_FIELDS == ()
+    assert KI_FIELDS == ("KI_coordinating_edits", "KI_compromise")
+
+
+@pytest.mark.parametrize(
+    ("coordinating_edits", "compromise", "expected_ki"),
+    [(0, 0, False), (1, 0, True), (0, 1, True), (1, 1, True)],
+)
+def test_ki_fields_are_independent_binary_dimensions(coordinating_edits, compromise, expected_ki):
+    values = base(
+        KS_present=0,
+        KI_coordinating_edits=coordinating_edits,
+        KI_compromise=compromise,
+    )
+    result = normalize_and_validate(values, set(values))
+    assert result.valid
+    assert result.payload["KI_coordinating_edits"] == coordinating_edits
+    assert result.payload["KI_compromise"] == compromise
+    assert derived_ki_present(result.payload) is expected_ki
+
+
+@pytest.mark.parametrize("field", KI_FIELDS)
+def test_both_ki_fields_are_required_for_normal_utterances(field):
+    values = base()
+    answered = set(values) - {field}
+    result = normalize_and_validate(values, answered)
+    assert result.errors[field] == "An explicit response is required."
+
+
+def test_legacy_ki_present_only_payload_is_structurally_stale():
+    legacy_payload = {name: None for name in CURRENT_UTTERANCE_SCHEMA_FIELDS if name not in KI_FIELDS}
+    legacy_payload["KI_present"] = 1
+    assert not is_structurally_compatible_utterance(legacy_payload)
+    assert not is_current_submitted_utterance("submitted", legacy_payload)
+    assert is_current_dispute_decision(
+        {"C_primary_dispute_object": "uncertain", "DV_dispute_resolution": 3}, {"uncertain"}
+    )
+
+
+def test_current_schema_contains_only_the_two_persisted_ki_fields():
+    assert set(KI_FIELDS) == {"KI_coordinating_edits", "KI_compromise"}
+    assert set(KI_FIELDS) <= set(CURRENT_UTTERANCE_SCHEMA_FIELDS)
+    assert "KI_present" not in CURRENT_UTTERANCE_SCHEMA_FIELDS
+    assert "KI_present" not in ANNOTATION_FIELDS
+    assert len(ANNOTATION_FIELDS) == len(set(ANNOTATION_FIELDS))
+
+
+def test_malformed_utterance_keeps_construct_labels_optional():
+    values = base(
+        malformed_utterance=True,
+        KS_present=None,
+        KI_coordinating_edits=None,
+        KI_compromise=None,
+    )
+    result = normalize_and_validate(values, {"coder_confidence", "review_flag"})
+    assert result.valid
+    assert result.payload["KI_coordinating_edits"] is None
+    assert result.payload["KI_compromise"] is None
 
 
 def test_ks_parent_no_clears_children_and_answered_state():

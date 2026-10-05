@@ -15,8 +15,10 @@ from wikidisputes_ui.export import build_export, safe_export_name
 from wikidisputes_ui.ingest import article_title, display_order, read_gold
 from wikidisputes_ui.models import (
     BASE_BINARY,
+    KI_FIELDS,
     KS_FIELDS,
     applicable_fields,
+    derived_ki_present,
     is_current_dispute_decision,
     is_current_submitted_utterance,
     is_finalized_dispute,
@@ -387,8 +389,11 @@ with reading.container(height=650, border=False, key="utterance_reading_pane"):
                 prior_payload = json.loads(prior_annotation["payload_json"])
                 classifications = tuple(
                     label
-                    for label, field in (("KS", "KS_present"), ("KI", "KI_present"))
-                    if prior_payload.get(field) == 1
+                    for label, present in (
+                        ("KS", prior_payload.get("KS_present") == 1),
+                        ("KI", derived_ki_present(prior_payload)),
+                    )
+                    if present
                 )
                 badges += classifications or ("Neither KS nor KI",)
         prior_comment(turn, badges)
@@ -429,8 +434,9 @@ with coding.container(height=430, border=False, key="utterance_coding_pane"):
         for name in KS_FIELDS:
             values[name] = None
             answered.discard(name)
-    ask("KI_present")
-    for name in BASE_BINARY[2:]:
+    for name in KI_FIELDS:
+        ask(name)
+    for name in BASE_BINARY[1:]:
         ask(name)
     task_intro(
         tasks, "How confident are you in this utterance annotation?", description="Choose your confidence level."
