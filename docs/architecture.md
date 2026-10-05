@@ -19,8 +19,8 @@ The model clears hidden children to null and removes them from `answered_fields`
 KI dimensions; the retired `KI_present` answer is never mapped to either dimension.
 
 Only when all substantive utterances in a dispute are submitted may the UI store the final dispute payload. That
-payload and its `answered_fields` contain only `C_primary_dispute_object`; allowed values come from its authoritative
-Indicator enum, with matching explanations parsed from coding-rule bullets when available.
+payload and its `answered_fields` contain `C_primary_dispute_object` and `DV_dispute_resolution`; allowed values come
+from their authoritative Indicator definitions and coding guidance.
 
 SQLite current tables are coder-isolated projections; event tables are append-only. No schema migration is needed for
 the simplified fields because payloads are JSON. Each write retains schema identity, UTC timestamps, elapsed wall time,
