@@ -414,31 +414,24 @@ with coding.container(height=430, border=False, key="utterance_coding_pane"):
             answered.add(name)
 
     if values["malformed_utterance"]:
-        for name in BASE_BINARY + KS_FIELDS:
-            widget_key = f"answer_{name}_{uid}"
-            if widget_key in st.session_state:
-                values[name] = st.session_state[widget_key]
-            if values.get(name) is not None:
-                answered.add(name)
         st.caption("Construct labels are optional for this utterance; any answers already entered are preserved.")
-    else:
-        ask("KS_present")
-        if values["KS_present"] == 1:
-            with st.container(border=True):
-                st.caption("Knowledge staking details")
-                for name in KS_FIELDS:
-                    if name == "KS_new_evidence" and values.get("KS_grounding") != 1:
-                        values[name] = None
-                        answered.discard(name)
-                    else:
-                        ask(name)
-        else:
+    ask("KS_present")
+    if values["KS_present"] == 1:
+        with st.container(border=True):
+            st.caption("Knowledge staking details")
             for name in KS_FIELDS:
-                values[name] = None
-                answered.discard(name)
-        ask("KI_present")
-        for name in BASE_BINARY[2:]:
-            ask(name)
+                if name == "KS_new_evidence" and values.get("KS_grounding") != 1:
+                    values[name] = None
+                    answered.discard(name)
+                else:
+                    ask(name)
+    else:
+        for name in KS_FIELDS:
+            values[name] = None
+            answered.discard(name)
+    ask("KI_present")
+    for name in BASE_BINARY[2:]:
+        ask(name)
     task_intro(
         tasks, "How confident are you in this utterance annotation?", description="Choose your confidence level."
     )

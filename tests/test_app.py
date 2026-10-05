@@ -404,13 +404,30 @@ def test_malformed_utterance_can_submit_without_construct_labels(monkeypatch, sy
         item for item in app.checkbox if item.label == "Malformed utterance / not reliably one speaker-turn"
     )
     app = malformed.check().run()
-    assert "Does this utterance stake knowledge?" not in {item.label for item in app.radio}
+    assert "Does this utterance stake knowledge?" in {item.label for item in app.radio}
     radio(app, "How confident are you in this utterance annotation?").set_value(3)
     radio(app, "Flag this utterance for review?").set_value(0)
     app = next(button for button in app.button if button.label == "Submit and next").click().run()
     saved = Storage(synthetic_project.database_path).current_utterance("coder_01", "u1")
     assert saved["status"] == "submitted"
     assert saved["payload"]["malformed_utterance"] is True
+    assert saved["payload"]["KS_present"] is None
+
+
+def test_malformed_utterance_can_submit_construct_labels(monkeypatch, synthetic_project):
+    app = enter(configured(monkeypatch, synthetic_project))
+    malformed = next(
+        item for item in app.checkbox if item.label == "Malformed utterance / not reliably one speaker-turn"
+    )
+    app = malformed.check().run()
+    app = answer_all(app, ks=1, ki=1)
+    app = next(button for button in app.button if button.label == "Submit and next").click().run()
+    saved = Storage(synthetic_project.database_path).current_utterance("coder_01", "u1")
+    assert saved["status"] == "submitted"
+    assert saved["payload"]["malformed_utterance"] is True
+    assert saved["payload"]["KS_present"] == 1
+    assert saved["payload"]["KI_present"] == 1
+    assert saved["payload"]["KS_explicit_reasoning"] == 0
 
 
 def test_earlier_conversation_shows_prior_ks_and_ki_labels(monkeypatch, synthetic_project):
